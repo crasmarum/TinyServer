@@ -1,4 +1,4 @@
-<table border="0">
+<table style="border:none">
     <tr>
         <td><img src="https://github.com/crasmarum/TinyServer/blob/main/logo.png" width="96"></td>
         <td>&nbsp;</td>
