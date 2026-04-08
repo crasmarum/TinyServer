@@ -16,7 +16,7 @@ map /testjson com.example.web.JsonServlet
 map /TestServlet com.example.web.TestServlet
 
 # DI
-inject com.example.web.DBCleaner com.tinyserver.servlet.JanitorThread
+inject com.tinyserver.servlet.JanitorThread com.tinyserver.servlet.JanitorThread
 
 
 
