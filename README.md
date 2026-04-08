@@ -466,7 +466,7 @@ TinyServer/src/
     ReadWriteLock.java      Reentrant read/write lock used internally
 
 ExampleWebApp/src/
-  com/test/web/
+  com/example/web/
     JsonServlet.java        Example: returns runtime metrics as JSON (maps to /testjson)
     TestServlet.java        Example: reads a form field, sets an attribute, forwards to JSP
     TestClass.java          Helper used by Test.jsp
