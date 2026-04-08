@@ -7,6 +7,10 @@
 
 ---
 
+TinyServer is a lightweight Java HTTP server that supports GET and POST requests, servlet-based request handling, minimal JSP templating, JSON parsing and serialization, dependency injection, and pluggable logging. It requires Java 21+ as it uses virtual threads.
+
+---
+
 ## Table of Contents
 
 1. [Starting the server](#1-starting-the-server)
