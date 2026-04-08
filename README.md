@@ -1,10 +1,7 @@
-<table style="border:none">
+<table>
     <tr>
-        <td><img src="https://github.com/crasmarum/TinyServer/blob/main/logo.png" width="96"></td>
-        <td>&nbsp;</td>
-        <td># TinyServer — Developer Guide
-
-TinyServer is a lightweight Java HTTP server that supports GET and POST requests, servlet-based request handling, minimal JSP templating, JSON serialization, dependency injection, and pluggable logging. It requires Java 21+ (uses virtual threads).</td>
+        <td><img src="https://github.com/crasmarum/TinyServer/blob/main/logo.png" width="96">&nbsp;</td>
+        <td><h1>TinyServer — Developer Guide</h1></td>
     </tr>
 </table>
 
