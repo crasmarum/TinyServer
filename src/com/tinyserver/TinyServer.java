@@ -34,10 +34,6 @@ public class TinyServer extends ServerEngine {
 		super(configFile);
 	}
 
-	public String getRepositoryPath() {
-		return getRepositoryLocation().getAbsolutePath();
-	}
-
 	protected void execute(HTTPRequest request, BufferedOutputStream bufferedoutputstream) {
 		String method = request.getMethod();
 		try {

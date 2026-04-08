@@ -22,7 +22,6 @@ import java.util.StringTokenizer;
 import java.util.Timer;
 import java.util.TimerTask;
 
-import com.tinyserver.repo.FlatRepository;
 import com.tinyserver.servlet.HTTPRequest;
 import com.tinyserver.servlet.HTTPResponse;
 import com.tinyserver.servlet.JanitorThread;
@@ -48,7 +47,6 @@ public abstract class ServerEngine implements Runnable {
 	private final ServerSocket mServerSocket;
 	private final int mPort;
 	private boolean isRunning = false;
-	private File mRepository;
 	private JanitorThread janitor;
 
 	protected Config mConfig = new Config();
@@ -407,8 +405,6 @@ public abstract class ServerEngine implements Runnable {
 		mServerSocket = new ServerSocket(port);
 		mPort = port;
 
-		mRepository = new File(FlatRepository.REPOSITORY_PATH);
-
 		setRunning(true);
 	}
 
@@ -430,14 +426,6 @@ public abstract class ServerEngine implements Runnable {
 
 	protected synchronized void setRunning(boolean isRunning) {
 		this.isRunning = isRunning;
-	}
-
-	protected File getRepositoryLocation() {
-		return mRepository;
-	}
-
-	protected String getRepositoryPath() {
-		return FlatRepository.REPOSITORY_PATH;
 	}
 
 }

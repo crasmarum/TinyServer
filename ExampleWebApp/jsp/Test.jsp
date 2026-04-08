@@ -140,7 +140,7 @@
 
   async function fetchVarzAlert() {
     try {
-      const response = await fetch('/varz', {
+      const response = await fetch('/testjson', {
         method: 'GET',
         headers: { 'Accept': 'application/json' }
       });
