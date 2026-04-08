@@ -39,6 +39,8 @@ java -cp server.jar:web.jar com.tinyserver.Main /path/to/config.txt
 java -cp server.jar:web.jar com.tinyserver.Main
 ```
 
+See the `buid_jars.sh` shell script on how to build the above mentioned jars.
+
 ### Shutdown
 
 The server installs a JVM shutdown hook. Press `Ctrl-C` or send `SIGTERM` — the log thread is flushed before the process exits.
