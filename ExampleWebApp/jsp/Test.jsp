@@ -1,6 +1,6 @@
   <%!   
   java.lang.String getItem(int indx) {
-	  return new com.secchat.web.TestClass().getMessage() + indx;
+	  return new com.example.web.TestClass().getMessage() + indx;
   }
   %>
 
