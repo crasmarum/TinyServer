@@ -1,0 +1,47 @@
+<svg viewBox="0 0 90 90" width="360" height="360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TinyServer logo">
+  <defs>
+    <linearGradient id="hServerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#388bfd"/>
+      <stop offset="100%" stop-color="#1a56c4"/>
+    </linearGradient>
+    <linearGradient id="hLedGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#3ddc84"/>
+      <stop offset="100%" stop-color="#1a8a44"/>
+    </linearGradient>
+    <filter id="hGlow">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#1a56c4" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Outer glow ring -->
+  <circle cx="45" cy="45" r="42" fill="none" stroke="#388bfd" stroke-width="1" opacity="0.25"/>
+
+  <!-- Background circle -->
+  <circle cx="45" cy="45" r="40" fill="#161b22" filter="url(#shadow)"/>
+
+  <!-- Server chassis -->
+  <rect x="18" y="16" width="54" height="58" rx="6" ry="6" fill="#21262d" stroke="#30363d" stroke-width="1.2"/>
+
+  <!-- Accent top bar -->
+  <rect x="18" y="16" width="54" height="5" rx="6" fill="url(#hServerGrad)"/>
+
+  <!-- Drive slots -->
+  <rect x="24" y="26" width="42" height="8"  rx="2.5" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+  <rect x="24" y="38" width="42" height="8"  rx="2.5" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+  <rect x="24" y="50" width="42" height="8"  rx="2.5" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+  <rect x="24" y="62" width="42" height="5"  rx="2.5" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+
+  <!-- LEDs -->
+  <circle cx="60" cy="30" r="2.8" fill="url(#hLedGrad)" filter="url(#hGlow)"/>
+  <circle cx="60" cy="42" r="2.8" fill="url(#hLedGrad)" filter="url(#hGlow)"/>
+  <circle cx="60" cy="54" r="2.8" fill="#3a3a3a"/>
+  <circle cx="60" cy="64.5" r="2"   fill="#3a3a3a"/>
+
+  <!-- Small "T" monogram badge -->
+  <circle cx="35" cy="30" r="6" fill="url(#hServerGrad)" opacity="0.9"/>
+  <text x="35" y="34" text-anchor="middle" font-family="monospace" font-size="9" font-weight="700" fill="#fff">T</text>
+</svg>

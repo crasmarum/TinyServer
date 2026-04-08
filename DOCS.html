@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TinyServer — Developer Guide</title>
+
+  <!-- Highlight.js for syntax highlighting -->
+  <link rel="stylesheet"
+        href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/java.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/bash.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/xml.min.js"></script>
+  <script>hljs.highlightAll();</script>
+
+  <style>
+    /* ── Reset & base ──────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.7;
+      color: #24292f;
+      background: #f6f8fa;
+    }
+
+    /* ── Layout ────────────────────────────────────────────────────── */
+    .layout {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    nav {
+      width: 240px;
+      flex-shrink: 0;
+      background: #1b1f23;
+      color: #cdd9e5;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 24px 0 32px;
+    }
+
+    nav .nav-logo {
+      padding: 0 20px 20px;
+      border-bottom: 1px solid #30363d;
+      margin-bottom: 12px;
+    }
+
+    nav .nav-logo svg {
+      display: block;
+      width: 100%;
+      max-width: 180px;
+      height: auto;
+    }
+
+    nav a {
+      display: block;
+      padding: 6px 20px;
+      color: #8b949e;
+      text-decoration: none;
+      font-size: 13.5px;
+      border-left: 3px solid transparent;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+    }
+
+    nav a:hover {
+      color: #e6edf3;
+      background: #21262d;
+      border-left-color: #388bfd;
+    }
+
+    nav a.active {
+      color: #e6edf3;
+      border-left-color: #388bfd;
+    }
+
+    main {
+      flex: 1;
+      min-width: 0;
+      padding: 40px 56px 80px;
+      max-width: 960px;
+    }
+
+    /* ── Typography ────────────────────────────────────────────────── */
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #0d1117;
+      border-bottom: 2px solid #d0d7de;
+      padding-bottom: 12px;
+      margin-bottom: 20px;
+    }
+
+    h2 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: #0d1117;
+      margin-top: 52px;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #d0d7de;
+      scroll-margin-top: 24px;
+    }
+
+    h3 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #0d1117;
+      margin-top: 28px;
+      margin-bottom: 10px;
+      scroll-margin-top: 24px;
+    }
+
+    p {
+      margin-bottom: 14px;
+      color: #24292f;
+    }
+
+    a { color: #0969da; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    ul, ol {
+      padding-left: 24px;
+      margin-bottom: 14px;
+    }
+
+    li { margin-bottom: 4px; }
+
+    hr {
+      border: none;
+      border-top: 1px solid #d0d7de;
+      margin: 40px 0;
+    }
+
+    /* ── Inline code ───────────────────────────────────────────────── */
+    code:not([class]) {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.875em;
+      background: #eaf0f7;
+      color: #c0392b;
+      border: 1px solid #d0d7de;
+      border-radius: 4px;
+      padding: 2px 5px;
+    }
+
+    /* ── Code blocks ───────────────────────────────────────────────── */
+    .code-wrap {
+      margin: 18px 0;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+
+    .code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #21262d;
+      padding: 7px 16px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 12px;
+      color: #8b949e;
+      user-select: none;
+    }
+
+    .code-header .lang-badge {
+      background: #30363d;
+      color: #58a6ff;
+      border-radius: 4px;
+      padding: 1px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+
+    .code-header .copy-btn {
+      background: none;
+      border: 1px solid #30363d;
+      color: #8b949e;
+      border-radius: 4px;
+      padding: 2px 10px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+    }
+
+    .code-header .copy-btn:hover {
+      color: #e6edf3;
+      border-color: #58a6ff;
+    }
+
+    .code-wrap pre {
+      margin: 0;
+      border-radius: 0;
+    }
+
+    .code-wrap pre code {
+      font-size: 13.5px !important;
+      padding: 18px 20px !important;
+      border-radius: 0 !important;
+      border: none !important;
+      background: none !important;
+      color: inherit !important;
+    }
+
+    /* plain (no language) blocks */
+    .code-wrap.plain pre {
+      background: #161b22;
+    }
+
+    .code-wrap.plain pre code {
+      color: #c9d1d9 !important;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    /* ── Tables ────────────────────────────────────────────────────── */
+    .table-wrap {
+      overflow-x: auto;
+      margin: 18px 0;
+      border-radius: 8px;
+      border: 1px solid #d0d7de;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px;
+    }
+
+    thead tr {
+      background: #f0f6fc;
+    }
+
+    th {
+      padding: 10px 16px;
+      text-align: left;
+      font-weight: 600;
+      color: #0d1117;
+      border-bottom: 2px solid #d0d7de;
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 9px 16px;
+      border-bottom: 1px solid #d0d7de;
+      vertical-align: top;
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    tbody tr:nth-child(even) { background: #f6f8fa; }
+    tbody tr:hover { background: #eaf5fb; }
+
+    td code:not([class]) {
+      white-space: nowrap;
+    }
+
+    /* ── TOC ───────────────────────────────────────────────────────── */
+    .toc {
+      background: #fff;
+      border: 1px solid #d0d7de;
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin-bottom: 40px;
+      display: inline-block;
+      min-width: 320px;
+    }
+
+    .toc h2 {
+      font-size: 1rem;
+      margin-top: 0;
+      border-bottom: none;
+      padding-bottom: 0;
+      margin-bottom: 10px;
+      color: #57606a;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-size: 11.5px;
+    }
+
+    .toc ol {
+      padding-left: 20px;
+    }
+
+    .toc li {
+      margin-bottom: 5px;
+    }
+
+    /* ── Callout boxes ─────────────────────────────────────────────── */
+    .note {
+      background: #ddf4ff;
+      border-left: 4px solid #388bfd;
+      border-radius: 0 6px 6px 0;
+      padding: 12px 16px;
+      margin: 16px 0;
+      font-size: 13.5px;
+      color: #0a3069;
+    }
+
+    /* ── Project layout (monospace tree) ──────────────────────────── */
+    .filetree {
+      background: #161b22;
+      color: #c9d1d9;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 13px;
+      padding: 20px 22px;
+      border-radius: 8px;
+      line-height: 1.8;
+      margin: 18px 0;
+      overflow-x: auto;
+    }
+
+    .filetree .dir  { display: block; color: #79c0ff; font-weight: 600; margin-top: 0.6em; }
+    .filetree .file { display: block; color: #c9d1d9; }
+    .filetree .desc { color: #8b949e; }
+    .filetree .desc::before { content: "\00a0\00a0"; }
+  </style>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ── Sidebar nav ─────────────────────────────────────────── -->
+  <nav>
+    <div class="nav-logo">
+      <!-- TinyServer logo — inline SVG -->
+      <svg viewBox="0 0 180 72" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TinyServer">
+        <defs>
+          <linearGradient id="serverGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%"   stop-color="#388bfd"/>
+            <stop offset="100%" stop-color="#1a56c4"/>
+          </linearGradient>
+          <linearGradient id="ledGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%"   stop-color="#3ddc84"/>
+            <stop offset="100%" stop-color="#1a8a44"/>
+          </linearGradient>
+          <filter id="glow">
+            <feGaussianBlur stdDeviation="2" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+
+        <!-- Server chassis -->
+        <rect x="4" y="8" width="52" height="56" rx="5" ry="5" fill="#21262d" stroke="#30363d" stroke-width="1.2"/>
+
+        <!-- Drive bay slots -->
+        <rect x="10" y="16" width="40" height="7"  rx="2" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+        <rect x="10" y="27" width="40" height="7"  rx="2" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+        <rect x="10" y="38" width="40" height="7"  rx="2" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+        <rect x="10" y="49" width="40" height="7"  rx="2" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+
+        <!-- LED indicators (green) -->
+        <circle cx="46" cy="19.5" r="2.2" fill="url(#ledGrad)" filter="url(#glow)"/>
+        <circle cx="46" cy="30.5" r="2.2" fill="url(#ledGrad)" filter="url(#glow)"/>
+        <circle cx="46" cy="41.5" r="2.2" fill="#555"/>
+        <circle cx="46" cy="52.5" r="2.2" fill="#555"/>
+
+        <!-- Front panel accent bar -->
+        <rect x="4" y="8"  width="52" height="4" rx="5" fill="url(#serverGrad)" opacity="0.85"/>
+
+        <!-- Text: TinyServer -->
+        <text x="64" y="30" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+              font-size="17" font-weight="700" fill="#e6edf3" letter-spacing="0.2">Tiny</text>
+        <text x="64" y="50" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+              font-size="17" font-weight="700" fill="url(#serverGrad)" letter-spacing="0.2">Server</text>
+
+        <!-- Small "v" version tag -->
+        <text x="138" y="50" font-family="monospace" font-size="9" fill="#8b949e">docs</text>
+      </svg>
+    </div>
+    <a href="#top">Overview</a>
+    <a href="#s1">1. Starting the server</a>
+    <a href="#s2">2. Configuration file</a>
+    <a href="#s3">3. Writing a servlet</a>
+    <a href="#s4">4. Writing a JSP</a>
+    <a href="#s5">5. Forwarding</a>
+    <a href="#s6">6. HTTPRequest</a>
+    <a href="#s7">7. HTTPResponse</a>
+    <a href="#s8">8. JSON serialization</a>
+    <a href="#s9">9. Dependency injection</a>
+    <a href="#s10">10. Logging</a>
+    <a href="#s11">11. Janitor thread</a>
+    <a href="#s12">12. Async browser calls</a>
+    <a href="#s13">13. Project layout</a>
+  </nav>
+
+  <!-- ── Main content ────────────────────────────────────────── -->
+  <main id="top">
+
+    <!-- ── Hero logo ─────────────────────────────────────────────── -->
+    <div style="display:flex; align-items:center; gap:28px; margin-bottom:28px; padding-bottom:24px; border-bottom:2px solid #d0d7de;">
+      <svg viewBox="0 0 90 90" width="90" height="90" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TinyServer logo" style="flex-shrink:0;">
+        <defs>
+          <linearGradient id="hServerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%"   stop-color="#388bfd"/>
+            <stop offset="100%" stop-color="#1a56c4"/>
+          </linearGradient>
+          <linearGradient id="hLedGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%"   stop-color="#3ddc84"/>
+            <stop offset="100%" stop-color="#1a8a44"/>
+          </linearGradient>
+          <filter id="hGlow">
+            <feGaussianBlur stdDeviation="2.5" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+            <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#1a56c4" flood-opacity="0.35"/>
+          </filter>
+        </defs>
+
+        <!-- Outer glow ring -->
+        <circle cx="45" cy="45" r="42" fill="none" stroke="#388bfd" stroke-width="1" opacity="0.25"/>
+
+        <!-- Background circle -->
+        <circle cx="45" cy="45" r="40" fill="#161b22" filter="url(#shadow)"/>
+
+        <!-- Server chassis -->
+        <rect x="18" y="16" width="54" height="58" rx="6" ry="6" fill="#21262d" stroke="#30363d" stroke-width="1.2"/>
+
+        <!-- Accent top bar -->
+        <rect x="18" y="16" width="54" height="5" rx="6" fill="url(#hServerGrad)"/>
+
+        <!-- Drive slots -->
+        <rect x="24" y="26" width="42" height="8"  rx="2.5" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+        <rect x="24" y="38" width="42" height="8"  rx="2.5" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+        <rect x="24" y="50" width="42" height="8"  rx="2.5" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+        <rect x="24" y="62" width="42" height="5"  rx="2.5" fill="#161b22" stroke="#30363d" stroke-width="0.8"/>
+
+        <!-- LEDs -->
+        <circle cx="60" cy="30" r="2.8" fill="url(#hLedGrad)" filter="url(#hGlow)"/>
+        <circle cx="60" cy="42" r="2.8" fill="url(#hLedGrad)" filter="url(#hGlow)"/>
+        <circle cx="60" cy="54" r="2.8" fill="#3a3a3a"/>
+        <circle cx="60" cy="64.5" r="2"   fill="#3a3a3a"/>
+
+        <!-- Small "T" monogram badge -->
+        <circle cx="35" cy="30" r="6" fill="url(#hServerGrad)" opacity="0.9"/>
+        <text x="35" y="34" text-anchor="middle" font-family="monospace" font-size="9" font-weight="700" fill="#fff">T</text>
+      </svg>
+
+      <div>
+        <h1 style="border:none; padding:0; margin:0 0 6px; font-size:2rem;">TinyServer</h1>
+        <p style="margin:0; color:#57606a; font-size:1rem;">Developer Guide — lightweight Java HTTP server</p>
+        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+          <span style="background:#ddf4ff; color:#0550ae; font-size:12px; font-weight:600; padding:2px 10px; border-radius:20px; border:1px solid #b6e3ff;">Java 21+</span>
+          <span style="background:#dcfce7; color:#166534; font-size:12px; font-weight:600; padding:2px 10px; border-radius:20px; border:1px solid #bbf7d0;">Virtual Threads</span>
+          <span style="background:#fdf4ff; color:#7c3aed; font-size:12px; font-weight:600; padding:2px 10px; border-radius:20px; border:1px solid #e9d5ff;">JSP</span>
+          <span style="background:#fff7ed; color:#c2410c; font-size:12px; font-weight:600; padding:2px 10px; border-radius:20px; border:1px solid #fed7aa;">Servlet DI</span>
+        </div>
+      </div>
+    </div>
+    <p>
+      TinyServer is a lightweight Java HTTP server that supports GET and POST requests,
+      servlet-based request handling, minimal JSP templating, JSON serialization,
+      dependency injection, and pluggable logging. It requires <strong>Java 21+</strong>
+      (uses virtual threads).
+    </p>
+
+    <!-- TOC -->
+    <div class="toc">
+      <h2>Table of Contents</h2>
+      <ol>
+        <li><a href="#s1">Starting the server</a></li>
+        <li><a href="#s2">Configuration file</a></li>
+        <li><a href="#s3">Writing a servlet</a></li>
+        <li><a href="#s4">Writing a JSP</a></li>
+        <li><a href="#s5">Forwarding between servlets and JSPs</a></li>
+        <li><a href="#s6">HTTPRequest reference</a></li>
+        <li><a href="#s7">HTTPResponse reference</a></li>
+        <li><a href="#s8">JSON serialization</a></li>
+        <li><a href="#s9">Dependency injection</a></li>
+        <li><a href="#s10">Logging</a></li>
+        <li><a href="#s11">Janitor thread</a></li>
+        <li><a href="#s12">Async requests from the browser</a></li>
+        <li><a href="#s13">Project layout</a></li>
+      </ol>
+    </div>
+
+    <hr>
+
+    <!-- ── §1 ── -->
+    <h2 id="s1">1. Starting the server</h2>
+
+    <h3>From the command line</h3>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">bash</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-bash"># With a config file (recommended)
+java -cp server.jar com.tinyserver.Main /path/to/config.txt
+
+# Without a config file — starts on port 8080 with defaults
+java -cp server.jar com.tinyserver.Main</code></pre>
+    </div>
+
+    <h3>Shutdown</h3>
+    <p>
+      The server installs a JVM shutdown hook. Press <code>Ctrl-C</code> or send
+      <code>SIGTERM</code> — the log thread is flushed and closed before the process exits.
+    </p>
+
+    <hr>
+
+    <!-- ── §2 ── -->
+    <h2 id="s2">2. Configuration file</h2>
+    <p>
+      The config file is a plain-text file. Each line is <code>key value</code>
+      (whitespace-separated). Blank lines and lines beginning with <code>#</code> are ignored.
+    </p>
+
+    <div class="code-wrap plain">
+      <div class="code-header">
+        <span class="lang-badge">config</span>
+        <span>ExampleWebApp/src/config.txt</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="nohighlight"># ExampleWebApp/src/config.txt
+
+port 8080
+max_req_len 1000000
+use_virtual_threads true
+log_file_dir /Users/agent07/server
+
+# Static HTML files
+html_dir /Users/agent07/deploy/html
+
+# JSP files
+jsp_dir /Users/agent07/deploy/jsp
+jsp_class_path server.jar:web.jar
+always_compile_jsps true
+
+# Servlet mappings  (map &lt;url-path&gt; &lt;fully-qualified-class&gt;)
+map /testjson com.test.web.JsonServlet
+map /TestServlet com.test.web.TestServlet</code></pre>
+    </div>
+
+    <h3>All config keys</h3>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Key</th><th>Type</th><th>Default</th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>port</code></td><td>int</td><td>8080</td><td>TCP port to listen on</td></tr>
+          <tr><td><code>max_req_len</code></td><td>int</td><td>100 000 000</td><td>Maximum POST body size in bytes</td></tr>
+          <tr><td><code>use_virtual_threads</code></td><td>bool</td><td>false</td><td>Use Java 21 virtual threads per request</td></tr>
+          <tr><td><code>log_file_dir</code></td><td>path</td><td>—</td><td>Directory for daily rotating log files. If absent, logs go to stdout</td></tr>
+          <tr><td><code>html_dir</code></td><td>path</td><td>—</td><td>Directory for static files. Requests that don't match a servlet are served from here</td></tr>
+          <tr><td><code>jsp_dir</code></td><td>path</td><td>—</td><td>Root directory for <code>.jsp</code> files</td></tr>
+          <tr><td><code>jsp_class_path</code></td><td>string</td><td><code>server.jar</code></td><td>Classpath passed to the JSP compiler (colon-separated jars)</td></tr>
+          <tr><td><code>always_compile_jsps</code></td><td>bool</td><td>false</td><td>Recompile the JSP on every request instead of caching the compiled class</td></tr>
+          <tr><td><code>map</code></td><td>—</td><td>—</td><td>Maps a URL path to a servlet class (see §3)</td></tr>
+          <tr><td><code>inject</code></td><td>—</td><td>—</td><td>Registers a dependency injection binding (see §9)</td></tr>
+          <tr><td><code>static_inject</code></td><td>—</td><td>—</td><td>Like <code>inject</code> but creates a single shared instance (see §9)</td></tr>
+          <tr><td><code>janitor_schedule_minutes</code></td><td>int</td><td>720</td><td>How often the janitor thread runs (see §11)</td></tr>
+          <tr><td><em>anything else</em></td><td>string</td><td>—</td><td>Stored in the servlet context as <code>key → value</code>, readable via <code>Servlet.getFromContext(key)</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <hr>
+
+    <!-- ── §3 ── -->
+    <h2 id="s3">3. Writing a servlet</h2>
+    <p>
+      All servlets extend <code>com.tinyserver.servlet.Servlet</code> and implement
+      a single method:
+    </p>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">java</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-java">public void service(HTTPRequest request, HTTPResponse response)</code></pre>
+    </div>
+
+    <h3>Minimal example — JSON response</h3>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">java</span>
+        <span>JsonServlet.java</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-java">// ExampleWebApp/src/com/test/web/JsonServlet.java
+
+package com.test.web;
+
+import com.tinyserver.servlet.*;
+import com.tinyserver.servlet.HTTPResponse.HTTPRetCode;
+import java.io.File;
+
+class RuntimeValues {
+    public long maxMemoryM;
+    public long usedMemoryM;
+    public long noThreads;
+    public long noVirtualThreads;
+    public long queriesPerMinute;
+    public long freeDiskM;
+}
+
+public class JsonServlet extends Servlet {
+
+    @Override
+    public void service(HTTPRequest request, HTTPResponse response) {
+        response.setContentType("application/json");
+        try {
+            RuntimeValues varz = new RuntimeValues();
+            varz.maxMemoryM  = Runtime.getRuntime().maxMemory()   / 1_000_000;
+            varz.usedMemoryM = Runtime.getRuntime().totalMemory() / 1_000_000;
+            varz.noThreads   = Thread.activeCount();
+            varz.freeDiskM   = new File("/").getUsableSpace()     / 1_000_000;
+
+            response.getOutputStream().writeBytes(JsonSerializer.toJson(varz).getBytes());
+        } catch (Exception e) {
+            Log.error(e.toString());
+            response.getOutputStream().writeBytes(e.toString().getBytes());
+            response.setReturnCode(HTTPRetCode._500);
+        }
+    }
+}</code></pre>
+    </div>
+
+    <p>Register it in <code>config.txt</code>:</p>
+
+    <div class="code-wrap plain">
+      <div class="code-header">
+        <span class="lang-badge">config</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="nohighlight">map /testjson com.test.web.JsonServlet</code></pre>
+    </div>
+
+    <p>Now <code>GET /testjson</code> returns a JSON object.</p>
+
+    <h3>Minimal example — form handler that forwards to a JSP</h3>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">java</span>
+        <span>TestServlet.java</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-java">// ExampleWebApp/src/com/test/web/TestServlet.java
+
+public class TestServlet extends Servlet {
+
+    @Override
+    public void service(HTTPRequest request, HTTPResponse response) {
+        String name = request.parameters.get("name");           // form field
+        request.attributes.put("msg", "Hello, " + name + "!"); // pass data to JSP
+        request.forwardTo("/jsp/Test.jsp", response);           // render JSP
+    }
+}</code></pre>
+    </div>
+
+    <div class="code-wrap plain">
+      <div class="code-header">
+        <span class="lang-badge">config</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="nohighlight">map /TestServlet com.test.web.TestServlet</code></pre>
+    </div>
+
+    <hr>
+
+    <!-- ── §4 ── -->
+    <h2 id="s4">4. Writing a JSP</h2>
+    <p>
+      JSP files live in <code>jsp_dir</code> and are served under
+      <code>/jsp/&lt;filename&gt;</code>. The compiler supports three tag types:
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Tag</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>&lt;%! ... %&gt;</code></td><td><strong>Declaration</strong> — Java method or field placed outside <code>service()</code></td></tr>
+          <tr><td><code>&lt;%= ... %&gt;</code></td><td><strong>Expression</strong> — value written to the response with <code>out.print(...)</code></td></tr>
+          <tr><td><code>&lt;% ... %&gt;</code></td><td><strong>Scriptlet</strong> — raw Java statements inside <code>service()</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      The compiled class has access to <code>request</code> (<code>HTTPRequest</code>)
+      and <code>response</code> (<code>HTTPResponse</code>) automatically.
+    </p>
+
+    <h3>Example — <code>Test.jsp</code></h3>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">jsp</span>
+        <span>Test.jsp</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-xml">&lt;%!
+  // Declaration: helper method available to all scriptlets/expressions on this page
+  java.lang.String getItem(int indx) {
+      return new com.test.web.TestClass().getMessage() + indx;
+  }
+%&gt;
+
+&lt;!DOCTYPE html&gt;
+&lt;html&gt;
+&lt;head&gt;&lt;title&gt;Hello Tiny JSP&lt;/title&gt;&lt;/head&gt;
+&lt;body&gt;
+
+  &lt;!-- Expression: evaluated and written inline --&gt;
+  &lt;p&gt;Server time: &lt;%= (new java.util.Date()).toLocaleString() %&gt;&lt;/p&gt;
+
+  &lt;!-- Reading a request attribute set by a servlet --&gt;
+  &lt;b&gt;&lt;%= request.attributes.get("msg") == null ? "" : request.attributes.get("msg") %&gt;&lt;/b&gt;
+
+  &lt;!-- Scriptlet: loop --&gt;
+  &lt;% for (int i = 0; i &lt; 3; i++) { %&gt;
+      &lt;p&gt;&lt;%= getItem(i) %&gt;&lt;/p&gt;
+  &lt;% } %&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+    </div>
+
+    <p>
+      JSPs are compiled on first request and cached unless
+      <code>always_compile_jsps true</code> is set in config.
+    </p>
+
+    <hr>
+
+    <!-- ── §5 ── -->
+    <h2 id="s5">5. Forwarding between servlets and JSPs</h2>
+    <p>
+      A servlet can hand off to another servlet or JSP using
+      <code>request.forwardTo(path, response)</code>. The same <code>HTTPRequest</code>
+      object is reused, so attributes set before the forward are available in the target.
+    </p>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">java</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-java">// Set data in the originating servlet
+request.attributes.put("msg", "Hello from TestServlet " + name + "!");
+
+// Forward to a JSP — note the leading /jsp/ prefix
+request.forwardTo("/jsp/Test.jsp", response);</code></pre>
+    </div>
+
+    <p>Inside the JSP, read the attribute:</p>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">jsp</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-xml">&lt;%= request.attributes.get("msg") %&gt;</code></pre>
+    </div>
+
+    <hr>
+
+    <!-- ── §6 ── -->
+    <h2 id="s6">6. HTTPRequest reference</h2>
+    <p><code>com.tinyserver.servlet.HTTPRequest</code></p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Member</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>headers</code></td><td><code>Hashtable&lt;String,String&gt;</code></td><td>HTTP request headers (lower-cased keys)</td></tr>
+          <tr><td><code>parameters</code></td><td><code>Hashtable&lt;String,String&gt;</code></td><td>Query-string (GET) or form (POST <code>application/x-www-form-urlencoded</code>) parameters</td></tr>
+          <tr><td><code>attributes</code></td><td><code>Hashtable&lt;String,String&gt;</code></td><td>Arbitrary key/value pairs for inter-servlet communication</td></tr>
+          <tr><td><code>content</code></td><td><code>char[]</code></td><td>Raw POST body</td></tr>
+          <tr><td><code>files</code></td><td><code>Hashtable&lt;String, Hashtable&lt;String,byte[]&gt;&gt;</code></td><td>Uploaded files (multipart — reserved, not yet implemented)</td></tr>
+          <tr><td><code>getContent()</code></td><td><code>String</code></td><td><code>content</code> as a <code>String</code></td></tr>
+          <tr><td><code>getMethod()</code></td><td><code>String</code></td><td>The URL path, e.g. <code>/TestServlet</code></td></tr>
+          <tr><td><code>forwardTo(path, response)</code></td><td><code>void</code></td><td>Dispatch to another servlet or JSP</td></tr>
+          <tr><td><code>getServlet(path)</code></td><td><code>Servlet</code></td><td>Resolve a path to its <code>Servlet</code> instance (rarely called directly)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <hr>
+
+    <!-- ── §7 ── -->
+    <h2 id="s7">7. HTTPResponse reference</h2>
+    <p><code>com.tinyserver.servlet.HTTPResponse</code></p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Method</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>getOutputStream()</code></td><td><code>ByteArrayOutputStream</code> — write the response body here</td></tr>
+          <tr><td><code>setContentType(String)</code></td><td>Default is <code>"text/html"</code>. Use <code>"application/json"</code> for JSON responses</td></tr>
+          <tr><td><code>setCharacterEncoding(String)</code></td><td>Default is <code>"utf-8"</code></td></tr>
+          <tr><td><code>setReturnCode(HTTPRetCode)</code></td><td>Set HTTP status. Default is <code>_200</code></td></tr>
+          <tr><td><code>addHeader(String name, String value)</code></td><td>Add an arbitrary response header</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Available status codes (<code>HTTPRetCode</code> enum)</h3>
+    <p>
+      <code>_200</code>&ensp;
+      <code>_400</code>&ensp;
+      <code>_404</code>&ensp;
+      <code>_411</code>&ensp;
+      <code>_413</code>&ensp;
+      <code>_429</code>&ensp;
+      <code>_500</code>&ensp;
+      <code>_501</code>&ensp;
+      <code>_505</code>
+    </p>
+
+    <hr>
+
+    <!-- ── §8 ── -->
+    <h2 id="s8">8. JSON serialization</h2>
+    <p>
+      <code>com.tinyserver.servlet.JsonSerializer</code> converts plain Java objects
+      to/from JSON using reflection. All fields must be one of:
+      <code>String</code>, <code>int</code>, <code>long</code>, <code>BigInteger</code>,
+      or <code>List&lt;String | Integer | Long | T&gt;</code> where <code>T</code>
+      is another serializable type.
+    </p>
+
+    <h3>Serializing</h3>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">java</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-java">RuntimeValues varz = new RuntimeValues();
+varz.maxMemoryM = 512L;
+
+String json = JsonSerializer.toJson(varz);
+// → {"object":"RuntimeValues","maxMemoryM":512,...}</code></pre>
+    </div>
+
+    <p>
+      The <code>"object"</code> field is always emitted first and contains the simple
+      class name. It is used during deserialization for type checking.
+    </p>
+
+    <h3>Deserializing</h3>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">java</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-java">MyClass obj = new MyClass();
+boolean ok = JsonSerializer.getObjFrom(jsonString, obj);</code></pre>
+    </div>
+
+    <p>Returns <code>false</code> if any field could not be set.</p>
+
+    <h3>Limitations</h3>
+    <ul>
+      <li>Only public/package-private fields are inspected (no getters/setters).</li>
+      <li>Nested objects in lists must have a no-arg constructor.</li>
+      <li><code>boolean</code>, <code>double</code>, <code>float</code>, and <code>Map</code>
+          are not supported — they throw <code>IllegalArgumentException</code>.</li>
+    </ul>
+
+    <hr>
+
+    <!-- ── §9 ── -->
+    <h2 id="s9">9. Dependency injection</h2>
+    <p>
+      TinyServer has a simple field-level DI system. Annotate a field in your servlet
+      with <code>@Inject</code>:
+    </p>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">java</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-java">import com.tinyserver.servlet.Inject;
+
+public class MyServlet extends Servlet {
+
+    @Inject
+    MyRepository repo;   // injected before service() is called
+
+    @Override
+    public void service(HTTPRequest request, HTTPResponse response) {
+        repo.doSomething();
+    }
+}</code></pre>
+    </div>
+
+    <p>Register the concrete implementation in <code>config.txt</code>:</p>
+
+    <div class="code-wrap plain">
+      <div class="code-header">
+        <span class="lang-badge">config</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="nohighlight"># inject &lt;concrete-class&gt; &lt;interface-or-base-class&gt;
+inject com.myapp.SqlRepository com.myapp.MyRepository
+
+# static_inject — same but creates one shared instance (singleton)
+static_inject com.myapp.SqlRepository com.myapp.MyRepository</code></pre>
+    </div>
+
+    <ul>
+      <li><code>inject</code> creates a new instance per request.</li>
+      <li><code>static_inject</code> creates one instance at startup and reuses it.</li>
+      <li>The concrete class must implement or extend the declared field type, or config
+          loading will throw <code>ClassNotFoundException</code>.</li>
+    </ul>
+
+    <hr>
+
+    <!-- ── §10 ── -->
+    <h2 id="s10">10. Logging</h2>
+    <p><code>com.tinyserver.servlet.Log</code> is a static, async logger.</p>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">java</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-java">Log.debug("Detailed diagnostic info");
+Log.info("Mapped /foo to com.example.FooServlet");
+Log.error("Something went wrong: " + e.getMessage());
+Log.printStackTrace(exception);</code></pre>
+    </div>
+
+    <h3>Log output</h3>
+    <ul>
+      <li>Without <code>log_file_dir</code> in config: logs go to stdout synchronously.</li>
+      <li>With <code>log_file_dir /path/to/dir</code>: a background thread writes to
+          daily-rotating files named <code>yyyy_MM_dd.log</code>. The log thread is
+          drained and closed on <code>Log.stop()</code> (called automatically by the
+          shutdown hook).</li>
+    </ul>
+
+    <h3>Log format</h3>
+    <div class="code-wrap plain">
+      <div class="code-header">
+        <span class="lang-badge">log</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="nohighlight">2026-04-06 10:23:45,123    INFO    HTTPRequest method: /TestServlet</code></pre>
+    </div>
+
+    <h3>Input sanitization</h3>
+    <p>
+      <code>Log.sanitize(msg)</code> strips <code>\n</code> and <code>\r</code> from
+      log messages to prevent log injection. It is called automatically for all
+      <code>Log.info()</code> / <code>Log.debug()</code> / <code>Log.error()</code> calls.
+    </p>
+
+    <hr>
+
+    <!-- ── §11 ── -->
+    <h2 id="s11">11. Janitor thread</h2>
+    <p>
+      The janitor thread lets you run periodic background work (database cleanup, cache
+      expiry, etc.). Implement <code>com.tinyserver.servlet.JanitorThread</code> and
+      register it as a <code>static_inject</code>:
+    </p>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">java</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-java">public class MyJanitor extends JanitorThread {
+    @Override
+    public void doRecurringWork() {
+        Log.info("Janitor: cleaning up...");
+        // delete old records, compact caches, etc.
+    }
+}</code></pre>
+    </div>
+
+    <div class="code-wrap plain">
+      <div class="code-header">
+        <span class="lang-badge">config</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="nohighlight">static_inject com.myapp.MyJanitor com.tinyserver.servlet.JanitorThread
+janitor_schedule_minutes 60</code></pre>
+    </div>
+
+    <p>
+      <code>doRecurringWork()</code> is called immediately at startup and then every
+      <code>janitor_schedule_minutes</code> minutes.
+    </p>
+
+    <hr>
+
+    <!-- ── §12 ── -->
+    <h2 id="s12">12. Async requests from the browser</h2>
+    <p>
+      Fetch a servlet response asynchronously from a JSP or any HTML page.
+      Unless the header is already set via <code>response.getHeaders().put(ACCESS_CONTROL_ALLOW_ORIGIN, "whatever")</code>
+      
+      TinyServer always sends <code>Access-Control-Allow-Origin: *</code> on servlet
+      responses, so fetch calls always succeed from the same host.
+    </p>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">html</span>
+        <span>Test.jsp (browser-side)</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-xml">&lt;!-- Show raw response text in an alert --&gt;
+&lt;button onclick="fetchVarzAlert()"&gt;Async&lt;/button&gt;
+
+&lt;!-- Render JSON response as a table --&gt;
+&lt;button onclick="fetchVarz()"&gt;Get JSON&lt;/button&gt;</code></pre>
+    </div>
+
+    <div class="code-wrap">
+      <div class="code-header">
+        <span class="lang-badge">javascript</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code class="language-javascript">async function fetchVarzAlert() {
+  try {
+    const response = await fetch('/varz', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+    const text = await response.text();
+    alert(text);
+  } catch (error) {
+    alert(`Error fetching /varz:\n${error.message}`);
+  }
+}
+
+async function fetchVarz() {
+  try {
+    const response = await fetch('/testjson', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    renderTable(data);
+  } catch (error) {
+    alert(`Error: ${error.message}`);
+  }
+}</code></pre>
+    </div>
+
+    <hr>
+
+    <!-- ── §13 ── -->
+    <h2 id="s13">13. Project layout</h2>
+
+    <div class="filetree">
+<span class="dir">TinyServer/src/</span>
+  <span class="dir">com/tinyserver/</span>
+    <span class="file">Main.java          </span>  <span class="desc">Entry point — reads config, starts server, installs shutdown hook</span>
+    <span class="file">TinyServer.java    </span>  <span class="desc">Concrete server — dispatches requests to servlets / static files</span>
+    <span class="file">ServerEngine.java  </span>  <span class="desc">Abstract base — HTTP parsing (GET/POST), socket accept loop</span>
+    <span class="file">Config.java        </span>  <span class="desc">Config file parser, servlet registry, DI container</span>
+    <span class="file">MimeUtils.java     </span>  <span class="desc">Maps file extensions to MIME types</span>
+
+  <span class="dir">com/tinyserver/servlet/</span>
+    <span class="file">Servlet.java       </span>  <span class="desc">Base class for all servlets (also holds servlet context)</span>
+    <span class="file">HTTPRequest.java   </span>  <span class="desc">Parsed request: headers, parameters, attributes, body</span>
+    <span class="file">HTTPResponse.java  </span>  <span class="desc">Response builder: status, content-type, headers, body stream</span>
+    <span class="file">JspCompiler.java   </span>  <span class="desc">Compiles .jsp files to Servlet subclasses at runtime</span>
+    <span class="file">JsonSerializer.java</span>  <span class="desc">Reflection-based JSON serializer / deserializer</span>
+    <span class="file">JsonParser.java    </span>  <span class="desc">Low-level JSON stream parser</span>
+    <span class="file">JsonObj.java       </span>  <span class="desc">JSON value types (string, number, array, object)</span>
+    <span class="file">JsonListener.java  </span>  <span class="desc">Callback interface for JsonParser</span>
+    <span class="file">Inject.java        </span>  <span class="desc">@Inject field annotation for DI</span>
+    <span class="file">JanitorThread.java </span>  <span class="desc">Abstract base for periodic background tasks</span>
+    <span class="file">Log.java           </span>  <span class="desc">Async logger with daily-rotating file output</span>
+    <span class="file">ReadWriteLock.java </span>  <span class="desc">Reentrant read/write lock used internally</span>
+
+<span class="dir">ExampleWebApp/src/</span>
+  <span class="dir">com/test/web/</span>
+    <span class="file">JsonServlet.java   </span>  <span class="desc">Example: returns runtime metrics as JSON (maps to /testjson)</span>
+    <span class="file">TestServlet.java   </span>  <span class="desc">Example: reads a form field, sets an attribute, forwards to JSP</span>
+    <span class="file">TestClass.java     </span>  <span class="desc">Helper used by Test.jsp</span>
+
+<span class="dir">ExampleWebApp/jsp/</span>
+  <span class="file">Test.jsp           </span>  <span class="desc">Example JSP: date expression, form submit, async fetch, scriptlet loop</span>
+
+<span class="dir">ExampleWebApp/src/</span>
+  <span class="file">config.txt         </span>  <span class="desc">Canonical example configuration file</span>
+    </div>
+
+  </main>
+</div>
+
+<script>
+  // ── Copy button ────────────────────────────────────────────────────────────
+  function copyCode(btn) {
+    const pre = btn.closest('.code-wrap').querySelector('pre');
+    navigator.clipboard.writeText(pre.innerText).then(() => {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.style.color = '#3fb950';
+      btn.style.borderColor = '#3fb950';
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.style.color = '';
+        btn.style.borderColor = '';
+      }, 1800);
+    });
+  }
+
+  // ── Active nav highlight on scroll ────────────────────────────────────────
+  const sections = document.querySelectorAll('h2[id]');
+  const navLinks  = document.querySelectorAll('nav a[href^="#s"]');
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        navLinks.forEach(a => a.classList.remove('active'));
+        const match = document.querySelector(`nav a[href="#${entry.target.id}"]`);
+        if (match) match.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-10% 0px -80% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>
