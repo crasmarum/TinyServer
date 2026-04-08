@@ -60,16 +60,16 @@ use_virtual_threads true
 log_file_dir /Users/agent07/server
 
 # Static HTML files
-html_dir /Users/agent07/deploy/html
+html_dir /Users/agent07/server/html
 
 # JSP files
-jsp_dir /Users/agent07/deploy/jsp
+jsp_dir /Users/agent07/server/jsp
 jsp_class_path server.jar:web.jar
 always_compile_jsps true
 
 # Servlet mappings  (map <url-path> <fully-qualified-class>)
-map /testjson com.test.web.JsonServlet
-map /TestServlet com.test.web.TestServlet
+map /testjson com.example.web.JsonServlet
+map /TestServlet com.example.web.TestServlet
 ```
 
 ### All config keys
@@ -103,9 +103,9 @@ public void service(HTTPRequest request, HTTPResponse response)
 ### Minimal example — JSON response
 
 ```java
-// ExampleWebApp/src/com/test/web/JsonServlet.java
+// ExampleWebApp/src/com/example/web/JsonServlet.java
 
-package com.test.web;
+package com.example.web;
 
 import com.tinyserver.servlet.*;
 import com.tinyserver.servlet.HTTPResponse.HTTPRetCode;
@@ -145,7 +145,7 @@ public class JsonServlet extends Servlet {
 Register it in `config.txt`:
 
 ```
-map /testjson com.test.web.JsonServlet
+map /testjson com.example.web.JsonServlet
 ```
 
 Now `GET /testjson` returns a JSON object.
@@ -153,7 +153,7 @@ Now `GET /testjson` returns a JSON object.
 ### Minimal example — form handler that forwards to a JSP
 
 ```java
-// ExampleWebApp/src/com/test/web/TestServlet.java
+// ExampleWebApp/src/com/example/web/TestServlet.java
 
 public class TestServlet extends Servlet {
 
@@ -169,7 +169,7 @@ public class TestServlet extends Servlet {
 Register it:
 
 ```
-map /TestServlet com.test.web.TestServlet
+map /TestServlet com.example.web.TestServlet
 ```
 
 ---
@@ -192,7 +192,7 @@ The compiled class has access to `request` (`HTTPRequest`) and `response` (`HTTP
 <%!
   // Declaration: helper method available to all scriptlets/expressions on this page
   java.lang.String getItem(int indx) {
-      return new com.test.web.TestClass().getMessage() + indx;
+      return new com.example.web.TestClass().getMessage() + indx;
   }
 %>
 
