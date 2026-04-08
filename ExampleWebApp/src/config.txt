@@ -1,0 +1,19 @@
+port 8080
+max_req_len 1000000
+use_virtual_threads true
+log_file_dir /Users/agent07/server/logs
+
+# Static content.
+html_dir /Users/agent07/server/html
+
+# JSPs
+jsp_dir /Users/agent07/server/jsp
+jsp_class_path server.jar:web.jar
+always_compile_jsps true
+
+# Servlet mapping
+map /testjson com.example.web.JsonServlet
+map /TestServlet com.example.web.TestServlet
+
+
+
