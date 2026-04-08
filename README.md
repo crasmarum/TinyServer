@@ -33,10 +33,10 @@ TinyServer is a lightweight Java HTTP server that supports GET and POST requests
 
 ```bash
 # With a config file (recommended)
-java -cp server.jar com.tinyserver.Main /path/to/config.txt
+java -cp server.jar:web.jar com.tinyserver.Main /path/to/config.txt
 
 # Without a config file — starts on port 8080 with defaults
-java -cp server.jar com.tinyserver.Main
+java -cp server.jar:web.jar com.tinyserver.Main
 ```
 
 ### Shutdown
