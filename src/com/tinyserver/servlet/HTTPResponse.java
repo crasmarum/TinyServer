@@ -6,9 +6,10 @@ import java.util.TreeMap;
 
 public class HTTPResponse {
 	public enum HTTPRetCode {		
-		_200(200, "OK"), _400(400, "Bad Request"), _404(404, "Not Found"), 
+		_200(200, "OK"), _400(400, "Bad Request"), _403(403, "Unexpected request."),
+		_404(404, "Not Found"), _409(409, "Conflict"),
 		_411(411, "Length Required"), _413(413, "Request Entity Too Large"),
-		_429(429, "Too Many Requests"), _500(500, "Internal Server Error"), 
+		_429(429, "Too Many Requests"), _500(500, "Internal Server Error"),
 		_501(501, "Not Implemented"), _505(505, "HTTP Version Not Supported");
 		
 		private int code;

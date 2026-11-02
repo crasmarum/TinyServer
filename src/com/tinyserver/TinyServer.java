@@ -15,7 +15,7 @@ import com.tinyserver.servlet.Servlet;
  * 
  */
 public class TinyServer extends ServerEngine {
-	
+
 	private static String htmlDirectory;
 	
 	public static String getHtmlDirectory() {
@@ -32,6 +32,10 @@ public class TinyServer extends ServerEngine {
 	
 	public TinyServer(String configFile) throws Exception {
 		super(configFile);
+	}
+
+	public String getRepositoryPath() {
+		return getRepositoryLocation().getAbsolutePath();
 	}
 
 	protected void execute(HTTPRequest request, BufferedOutputStream bufferedoutputstream) {
@@ -51,15 +55,22 @@ public class TinyServer extends ServerEngine {
 			if (servlet != null) {
 				Log.info("servlet: " + servlet.getClass().descriptorString());
 				HTTPResponse response = new HTTPResponse();
+				// Mirror the client's keep-alive choice onto the response
+				// before invoking the servlet so servlets that explicitly
+				// set Connection: close (e.g. the JSP path below) win.
+				response.addHeader("Connection", request.keepAlive ? "keep-alive" : "close");
 				if (HTTPRequest.isJsp(method)) {
 					response.addHeader("Connection", "close");
 				}
+				long svcStartNs = System.nanoTime();
 				servlet.service(request, response);
+				long svcMs = (System.nanoTime() - svcStartNs) / 1_000_000L;
+				Log.info("[SERVICE " + method + "] service=" + svcMs + "ms");
 				deliverContent(bufferedoutputstream, response);
 			} else if (htmlDirectory != null && "/".equalsIgnoreCase(method)) {
-				deliverLocalContent(bufferedoutputstream, "/index.html", htmlDirectory);
+				deliverLocalContent(bufferedoutputstream, "/index.html", htmlDirectory, request);
 			} else if (htmlDirectory != null) {
-				deliverLocalContent(bufferedoutputstream, method, htmlDirectory);
+				deliverLocalContent(bufferedoutputstream, method, htmlDirectory, request);
 			} else if ("/".equalsIgnoreCase(method)) {
 				deliverInternalContent("index.html", bufferedoutputstream);
 			} else {

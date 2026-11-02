@@ -18,7 +18,8 @@ public class JspCompiler {
 	private static String JSP_CP = "server.jar";
 	private static String jspDirectory;
 	
-	private static Map<String, Servlet> jspServlets = new HashMap<String, Servlet>();
+	private static Map<String, Servlet> jspServlets = Collections.synchronizedMap(
+			new HashMap<String, Servlet>());
 	
 	public static String getJSP_CP() {
 		return JSP_CP;

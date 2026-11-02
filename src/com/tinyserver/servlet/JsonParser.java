@@ -3,7 +3,10 @@ package com.tinyserver.servlet;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +17,14 @@ import com.tinyserver.servlet.JsonObj.JSON_Type;
 
 public class JsonParser {
 	
+	// Both tables MUST have length 256: the `is_control` / `is_space` callers
+	// guard with `ch < 256` and then index into the array. The original
+	// literal counts (255 and 254) silently went OOB if a high-bit char ever
+	// reached the guard — currently unreachable because MySStream feeds bytes
+	// that widen to high `char` values outside the `<256` window, but a refactor
+	// of MySStream to char/int would expose the latent crash. Padded with a
+	// trailing tail of zeros to make the arrays' shape match their access
+	// pattern.
 	static char[] is_ctrl = new char[]{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 			1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -21,7 +32,7 @@ public class JsonParser {
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, };
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, };
 
 	static char[] is_w_space = new char[]{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 			0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -30,7 +41,7 @@ public class JsonParser {
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
 	static Boolean is_ending(char ch) {
 		return ch == ']' || ch == '}' || ch == ',';
@@ -175,33 +186,51 @@ public class JsonParser {
 		}
 	}
 
-	Boolean read_unicode(MySStream ss, ByteArrayOutputStream baos) {
+	/**
+	 * Reads exactly four hex digits (the body of a \\uXXXX escape) and returns
+	 * the integer value in [0, 0xFFFF], or -1 on any non-hex byte or EOF.
+	 */
+	int read_hex4(MySStream ss) {
 		int val = 0;
-		byte[] ch = new byte[4];
 		for (int var = 0; var < 4; ++var) {
-			ch[var] = ss.get();
+			int ch = ss.get();
+			int digit;
+			if (ch >= 48 && ch <= 57)        digit = ch - 48;          // 0-9
+			else if (ch >= 65 && ch <= 70)   digit = 10 + ch - 65;     // A-F
+			else if (ch >= 97 && ch <= 102)  digit = 10 + ch - 97;     // a-f
+			else                              return -1;                // includes EOF (-1)
+			val |= digit << (4 * (3 - var));
+		}
+		return val;
+	}
 
-			if (ch[var] >= 65 && ch[var] <= 70) {
-				val += (10 + ch[var] - 65) << 4 * (3 - var);
-				continue;
-			}
-			if (ch[var] >= 97 && ch[var] <= 102) {
-				val += (10 + ch[var] - 97) << 4 * (3 - var);
-				continue;
-			}
-			if (ch[var] >= 48 && ch[var] <= 57) {
-				val += (ch[var] - 48) << 4 * (3 - var);
-				continue;
-			}
+	Boolean read_unicode(MySStream ss, ByteArrayOutputStream baos) {
+		int first = read_hex4(ss);
+		if (first < 0) return false;
+
+		int codePoint;
+		if (Character.isHighSurrogate((char) first)) {
+			// Astral-plane codepoint: must be followed by another \\uXXXX
+			// holding the low surrogate. Reject malformed or EOF here so
+			// the caller propagates the parse failure rather than emitting
+			// an unpaired surrogate that would silently corrupt output.
+			if (ss.get() != '\\' || ss.get() != 'u') return false;
+			int low = read_hex4(ss);
+			if (low < 0 || !Character.isLowSurrogate((char) low)) return false;
+			codePoint = Character.toCodePoint((char) first, (char) low);
+		} else if (Character.isLowSurrogate((char) first)) {
+			// Unpaired low surrogate — would be invalid UTF-16 output.
 			return false;
+		} else {
+			codePoint = first;
 		}
 
-		String conv = to_utf8(val);
-		if ("err".equals(conv)) {
-			return false;
-		}
 		try {
-			baos.write(to_utf8(val).getBytes());
+			// Pin to UTF-8 explicitly. getBytes() with no argument picks up
+			// Charset.defaultCharset(), which on a non-UTF-8 JVM (e.g. legacy
+			// Windows CP-1252) would silently mangle non-ASCII payloads.
+			String s = new String(Character.toChars(codePoint));
+			baos.write(s.getBytes(StandardCharsets.UTF_8));
 		} catch (IOException e) {
 			return false;
 		}
@@ -246,9 +275,26 @@ public class JsonParser {
 			return false;
 		}
 		ss.get();
-		
+
 		ByteArrayOutputStream baos = new ByteArrayOutputStream();
 		while (ss.peek() != '"') {
+			// EOF inside an unterminated string. Without this guard, peek()
+			// stays at -1 forever, is_control((char)-1) returns false because
+			// 0xFFFF fails the `< 256` bound, and the loop spins consuming a
+			// CPU core indefinitely. Reachable from any unauthenticated POST
+			// that flows into TinyServer's JSON-parsing path.
+			//
+			// Compare to -1 EXACTLY rather than `< 0`: MySStream.peek()
+			// returns a SIGNED Java byte, so every UTF-8 starter and
+			// continuation byte for non-ASCII chars (e.g. 0xF0 for 👍 → -16)
+			// is also negative. `< 0` would short-circuit on the first byte
+			// of any emoji/CJK string and abort the parse — exactly what
+			// broke the e2e EMOJI round-trip. Byte 0xFF is itself invalid
+			// inside UTF-8 (neither a starter nor a continuation), so the
+			// `== -1` check uniquely identifies the EOF sentinel.
+			if (ss.peek() == -1) {
+				return false;
+			}
 			if (is_control((char)ss.peek())) {
 				return false;
 			}
@@ -338,7 +384,12 @@ public class JsonParser {
 	Stack<State> stack_ = new Stack<State>();
 	State state_ = State.START;
 	JsonObj current_ = new JsonObj();
-	char last_open = 0;
+	// Real bracket stack: one entry pushed per `[` / `{`, popped + matched
+	// on the corresponding `]` / `}`. Replaces the previous `last_open` scalar
+	// that only remembered the most-recent open and got silently reset to 0
+	// inside bracket_mismatch — that scalar missed every outer-level mismatch
+	// once any inner pair had closed (e.g. `[[1, 2]}` parsed as success).
+	Deque<Character> bracketStack_ = new ArrayDeque<>();
 
 	void pushState(State state) {
 		stack_.add(state);
@@ -374,31 +425,73 @@ public class JsonParser {
 		String key = obj.add_name("");
 		obj.setValue(value);
 
-		if (!value.isEmpty()) {
-			String[] ss = key.split("" + JsonObj.SEP);
-			List<String> list = new ArrayList<>();
-			for (String str : ss) {
-				if (!str.isEmpty()) {
-					list.add(str);
-				}
+		// Fire the listener for scalar values only — not for the
+		// structural-marker calls (J_Array / J_Object) that this method
+		// also receives at the start of each container. Those calls
+		// always carry an empty value and represent "an array/object is
+		// opening here", which listeners like ChatSerializer can't route
+		// to a leaf-shaped setSimpleFields path. The original code gated
+		// on `!value.isEmpty()`, which incidentally hid both the
+		// structural notifications AND empty string leaves — so a JSON
+		// `"k":""` round-tripped as `k=null`, breaking the empty-content
+		// delete-for-all signal. Gating on type lets empty-string leaves
+		// through (the actual bug) without re-leaking the structural
+		// markers.
+		if (type == JSON_Type.J_Array || type == JSON_Type.J_Object) {
+			return;
+		}
+
+		String[] ss = key.split("" + JsonObj.SEP);
+		List<String> list = new ArrayList<>();
+		for (String str : ss) {
+			if (!str.isEmpty()) {
+				list.add(str);
 			}
-			
-			for (JsonListener listener : listeners_) {
-				listener.on_data(type, list, value);
-			}
+		}
+
+		for (JsonListener listener : listeners_) {
+			listener.on_data(type, list, value);
 		}
 
 		//key_value_[key] = value;
 		//keys_.push_back(key);
 	}
 	
+	/**
+	 * PEEK-only check: returns true if the top of bracketStack_ doesn't match
+	 * the supplied close bracket (or the stack is empty). Does NOT pop. The
+	 * state machine reaches each close bracket twice — once in read_value
+	 * forwarding the char up, once in read_obj/read_array actually consuming
+	 * it — so popping inside the check would leave the second visit looking
+	 * at an empty stack and falsely report a mismatch. Popping is done
+	 * exclusively by {@link #close_bracket()} at the consume site.
+	 */
 	Boolean bracket_mismatch(char bracket) {
-		if ((last_open == '{' && bracket == ']')
-				|| (last_open == '[' && bracket == '}') ) {
+		if (bracketStack_.isEmpty()) {
 			return true;
 		}
-		last_open = 0;
-		return false;
+		char open = bracketStack_.peek();
+		if (open == '{' && bracket == '}') return false;
+		if (open == '[' && bracket == ']') return false;
+		return true;
+	}
+
+	/** Push an opening bracket onto the balance stack. */
+	void open_bracket(char bracket) {
+		bracketStack_.push(bracket);
+	}
+
+	/**
+	 * Pop the top of the balance stack — called by read_obj / read_array
+	 * AFTER bracket_mismatch has approved and ss.get() has consumed the
+	 * close bracket. Guarded against empty for safety; in normal flow the
+	 * stack is always non-empty here because bracket_mismatch would have
+	 * returned true (and we'd have errored) otherwise.
+	 */
+	void close_bracket() {
+		if (!bracketStack_.isEmpty()) {
+			bracketStack_.pop();
+		}
 	}
 	
 	Map<String, String> get_data() {
@@ -429,6 +522,7 @@ public class JsonParser {
 				return;
 			}
 			ss.get();
+			close_bracket();
 			L("END ARRAY");
 			current_ = current_.parent_;
 			state_ = popState();
@@ -456,6 +550,7 @@ public class JsonParser {
 				return;
 			}
 			ss.get();
+			close_bracket();
 			L("END OBJ");
 			current_ = current_.parent_;
 			state_ = popState();
@@ -553,7 +648,7 @@ public class JsonParser {
 
 		if (ss.peek() == '[') {
 			ss.get();
-			last_open = '[';
+			open_bracket('[');
 			pushState(State.READ_VALUE);
 			state_ = State.READ_ARRAY;
 			L("START ARRAY");
@@ -564,7 +659,7 @@ public class JsonParser {
 
 		if (ss.peek() == '{') {
 			ss.get();
-			last_open = '{';
+			open_bracket('{');
 			pushState(State.READ_VALUE);
 			state_ = State.READ_OBJ;
 			L("START OBJ");
@@ -608,20 +703,24 @@ public class JsonParser {
 		current_ = root;
 		state_ = State.START;
 		stack_.clear();
+		// Same reason as stack_.clear() — a reused JsonParser must not carry
+		// bracket state from a previous parse, or the next call's first
+		// close-bracket would match against the wrong open.
+		bracketStack_.clear();
 
 		while (state_ != State.STOP && state_ != State.ERROR) {
 			if (DEBUG) print_state(ss);
 
 			if (state_ == State.START && ss.peek() == '{') {
 				ss.get();
-				last_open = '{';
+				open_bracket('{');
 				pushState(State.STOP);
 				state_ = State.READ_OBJ;
 				continue;
 			}
 			if (state_ == State.START && ss.peek() == '[') {
 				ss.get();
-				last_open = '[';
+				open_bracket('[');
 				pushState(State.STOP);
 				state_ = State.READ_ARRAY;
 				continue;

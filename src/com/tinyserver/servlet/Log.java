@@ -31,7 +31,7 @@ public class Log {
 		}
 	}
 	
-	static DateTimeFormatter mFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd hh:mm:ss,SSS");
+	static DateTimeFormatter mFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss,SSS");
 	
 	static Level mLevel = Level.DEBUG;
 	static PrintStream mOut = System.out;
@@ -143,10 +143,16 @@ public class Log {
 					}
 
 					if (logInfo.ex != null) {
-						PrintWriter pw = new PrintWriter(new StringWriter());
+						// PrintWriter doesn't override toString(); the stack trace
+						// is captured by the StringWriter underneath. flush() pushes
+						// PrintWriter's internal buffer into the StringWriter
+						// before we read its contents.
+						StringWriter sw = new StringWriter();
+						PrintWriter pw = new PrintWriter(sw);
 						logInfo.ex.printStackTrace(pw);
-						logInfo.msg = pw.toString();
-					} 
+						pw.flush();
+						logInfo.msg = sw.toString();
+					}
 					
 					mOut.println(timestamp() + "\t" + logInfo.level.name() + "\t" +  logInfo.msg);
 					mOut.flush();

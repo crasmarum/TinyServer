@@ -187,6 +187,7 @@ public class MimeUtils {
 		mimeHash.put("vcf", "text/x-vcard");
 		mimeHash.put("vrml", "x-world/x-vrml");
 		mimeHash.put("wav", "audio/x-wav");
+		mimeHash.put("webp", "image/webp");
 		mimeHash.put("wcm", "application/vnd.ms-works");
 		mimeHash.put("wdb", "application/vnd.ms-works");
 		mimeHash.put("wks", "application/vnd.ms-works");
