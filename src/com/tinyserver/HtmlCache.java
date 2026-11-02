@@ -22,7 +22,7 @@ import com.tinyserver.servlet.Log;
  * <p>Lookup keys are the request-side paths that arrive at
  * {@code deliverLocalContent} — a leading slash followed by the file
  * name relative to {@code html_dir} (e.g. {@code "/index.html"},
- * {@code "/imgs/intro_f2f_1_alice_qr_sm.png"}). Path separators are
+ * {@code "/imgs/logo.png"}). Path separators are
  * normalised to {@code /} so lookups match on Windows too.</p>
  *
  * <p>Behaviour is deliberately conservative:</p>

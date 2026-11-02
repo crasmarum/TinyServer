@@ -243,8 +243,8 @@ public class Config {
 	}
 
 	/**
-	 * Returns the server-side pepper for {@code hash_auth_token}, or
-	 * {@code null} if no {@code db_token} line is configured.
+	 * Returns the server-side pepper for an application's token hashes,
+	 * or {@code null} if no {@code db_token} line is configured.
 	 */
 	public String getDbToken() {
 		return dbToken;

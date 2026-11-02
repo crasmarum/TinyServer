@@ -88,7 +88,17 @@ map /TestServlet com.example.web.TestServlet
 | `inject` | — | — | Registers a dependency injection binding (see §9) |
 | `static_inject` | — | — | Like `inject` but creates a single shared instance (see §9) |
 | `janitor_schedule_minutes` | int | 720 | How often the janitor thread runs (see §11) |
+| `keep_connection_alive` | bool | true | HTTP/1.1 keep-alive. `false` falls back to HTTP/1.0, closing the connection after each response (less memory on a small server) |
+| `cache_html` | bool | false | Serve the static files from an in-memory copy of `html_dir`, read once at start-up (restart to pick up changes) |
+| `cross_origin_isolation` | bool | false | Static responses carry COOP / COEP headers, so pages are cross-origin isolated (`SharedArrayBuffer`, e.g. WebAssembly threads). Every subresource must then be same-origin or CORP-marked. `.wasm` is always served as `application/wasm` |
+| `healthz_token` | string | — | Shared secret for an application's health-check endpoint (`?token=…`), read with `Config.getInstance().getHealthzToken()` |
+| `db_token` | string | — | Server-side secret ("pepper") an application can mix into hashes of tokens it stores, read with `Config.getInstance().getDbToken()` |
 | _anything else_ | string | — | Stored in the servlet context as `key → value`, readable via `Servlet.getFromContext(key)` |
+
+Built in, no configuration: requests for known scanner paths (`.env`, `wp-admin`, `.git`, …) ban the client IP for
+24 hours and close the socket without a response, and so do 20 or more 404s from one IP within 5 minutes
+(class `ProbeFilter`; the ban list lives in memory). Behind a reverse proxy on the same machine or network, the
+client IP is taken from `X-Forwarded-For`.
 
 ---
 
@@ -247,14 +257,37 @@ Inside the JSP, read the attribute:
 | Member | Type | Description |
 |--------|------|-------------|
 | `headers` | `Hashtable<String,String>` | HTTP request headers (lower-cased keys) |
-| `parameters` | `Hashtable<String,String>` | Query-string (GET) or form (POST `application/x-www-form-urlencoded`) parameters |
+| `parameters` | `Hashtable<String,String>` | Query-string (GET), form (POST `application/x-www-form-urlencoded`) or multipart text fields |
 | `attributes` | `Hashtable<String,String>` | Arbitrary key/value pairs for inter-servlet communication |
-| `content` | `char[]` | Raw POST body |
-| `files` | `Hashtable<String, Hashtable<String,byte[]>>` | Uploaded files (multipart — reserved, not yet implemented) |
+| `content` | `char[]` | POST body decoded as UTF-8 (empty for multipart requests) |
+| `uploads` | `List<UploadedFile>` | Files of a `multipart/form-data` request, in order: `field()`, `filename()`, `contentType()`, `data()` |
+| `getUpload(field)` | `UploadedFile` | The first file of a form field, or `null` |
+| `files` | `Hashtable<String, Hashtable<String,byte[]>>` | The same files as field → file name → bytes |
 | `getContent()` | `String` | `content` as a `String` |
 | `getMethod()` | `String` | The URL path, e.g. `/TestServlet` |
 | `forwardTo(path, response)` | `void` | Dispatch to another servlet or JSP |
 | `getServlet(path)` | `Servlet` | Resolve a path to its `Servlet` instance (rarely called directly) |
+
+### File uploads (`multipart/form-data`)
+
+A form with `enctype="multipart/form-data"` (or `fetch` with a `FormData` body) is parsed before the servlet runs
+(RFC 7578, class `Multipart`): text fields go to `parameters` (UTF-8), files to `uploads` / `files`, byte for byte.
+File names lose any directory part (`C:\a\photo.png` → `photo.png`); a file input left empty is skipped; a part
+without a Content-Type gets `application/octet-stream`. Bodies are read from the socket as raw bytes, never through a
+character decoder, so binary files are intact and kept-alive connections stay in step. `Expect: 100-continue` (curl,
+other HTTP clients) is answered. A body larger than `max_req_len` gets 413; a malformed multipart body gets 400.
+
+```java
+public void service(HTTPRequest request, HTTPResponse response) {
+    UploadedFile photo = request.getUpload("photo");       // <input type="file" name="photo">
+    String caption = request.parameters.get("caption");    // <input name="caption">
+    if (photo != null) Files.write(dir.resolve(photo.filename()), photo.data());   // check the name before using it as a path
+}
+```
+
+The whole body is held in memory (at most `max_req_len` bytes), so set `max_req_len` to the largest upload you accept.
+Tests: `MultipartTest` (parser cases, plus end to end against a running server: a 3 MB binary file, curl `-F`,
+keep-alive after an upload, malformed bodies).
 
 ---
 
