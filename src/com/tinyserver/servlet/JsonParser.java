@@ -384,6 +384,33 @@ public class JsonParser {
 	// once any inner pair had closed (e.g. `[[1, 2]}` parsed as success).
 	Deque<Character> bracketStack_ = new ArrayDeque<>();
 
+	/**
+	 * Most nested arrays / objects accepted; deeper input fails to parse (parse returns false). Each level copies its
+	 * parent's key path, so cost grows with the square of the depth. The depth limit alone does not bound the cost
+	 * (long keys over many siblings do the same): MAX_PATH_CHARS and MAX_NODES do.
+	 */
+	public static final int MAX_DEPTH = 64;
+	/**
+	 * Most characters of key paths one document may make the parser build. Every node stores its parent's path
+	 * plus its own key (JsonObj.add_name), so a long key over many siblings costs as much as deep nesting: a
+	 * 100 KB body could take hundreds of MB. Real documents use a few dozen characters per node.
+	 */
+	public static final int MAX_PATH_CHARS = 8_000_000;   // at most 16 MB of path strings
+	/** Most values (nodes) in one document; each costs a JsonObj in the tree. */
+	public static final int MAX_NODES = 200_000;
+
+	long pathChars_ = 0;
+	int nodes_ = 0;
+	boolean overBudget_ = false;
+
+	/** counts a path the tree just stored; past a limit the parse fails (checked in the parse loop) */
+	void charge(String path) {
+		pathChars_ += path.length();
+		if (pathChars_ > MAX_PATH_CHARS) {
+			overBudget_ = true;
+		}
+	}
+
 	void pushState(State state) {
 		stack_.add(state);
 	}
@@ -413,10 +440,17 @@ public class JsonParser {
 	}
 
 	void add_value(JSON_Type type, String value) {
+		if (++nodes_ > MAX_NODES) {
+			overBudget_ = true;
+		}
 		JsonObj obj = new JsonObj(type, current_);
 		current_.childrens_.add(obj);
 		String key = obj.add_name("");
+		charge(key);
 		obj.setValue(value);
+		if (overBudget_) {
+			return;   // the parse fails; do not hand a value to the listeners
+		}
 
 		// Fire the listener for scalar values only — not for the
 		// structural-marker calls (J_Array / J_Object) that this method
@@ -558,7 +592,7 @@ public class JsonParser {
 		}
 		ss.get(); // read \"
 		L("OBJ key: ", str.toString());
-		current_.add_name(str.toString());
+		charge(current_.add_name(str.toString()));
 
 		remove_space(ss);
 		if (ss.peek() != ':') {
@@ -640,6 +674,10 @@ public class JsonParser {
 		}
 
 		if (ss.peek() == '[') {
+			if (bracketStack_.size() >= MAX_DEPTH) {
+				state_ = State.ERROR;
+				return;
+			}
 			ss.get();
 			open_bracket('[');
 			pushState(State.READ_VALUE);
@@ -651,6 +689,10 @@ public class JsonParser {
 		}
 
 		if (ss.peek() == '{') {
+			if (bracketStack_.size() >= MAX_DEPTH) {
+				state_ = State.ERROR;
+				return;
+			}
 			ss.get();
 			open_bracket('{');
 			pushState(State.READ_VALUE);
@@ -700,9 +742,16 @@ public class JsonParser {
 		// bracket state from a previous parse, or the next call's first
 		// close-bracket would match against the wrong open.
 		bracketStack_.clear();
+		pathChars_ = 0;
+		nodes_ = 0;
+		overBudget_ = false;
 
 		while (state_ != State.STOP && state_ != State.ERROR) {
 			if (DEBUG) print_state(ss);
+			if (overBudget_) {
+				state_ = State.ERROR;   // MAX_PATH_CHARS or MAX_NODES exceeded
+				break;
+			}
 
 			if (state_ == State.START && ss.peek() == '{') {
 				ss.get();

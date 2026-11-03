@@ -44,6 +44,8 @@ See the `buid_jars.sh` shell script on how to build the above mentioned jars.
 ### Shutdown
 
 The server installs a JVM shutdown hook. Press `Ctrl-C` or send `SIGTERM` — the log thread is flushed before the process exits.
+If the server stops for any other reason (it fails to start, e.g. the port is taken, or its accept loop fails), the
+process exits with status 1, so a supervisor such as systemd (`Restart=on-failure`) restarts it.
 
 ---
 
@@ -349,9 +351,12 @@ Returns `false` if any field could not be set.
 
 ### Limitations
 
-- Only public/package-private fields are inspected (no getters/setters).
+- All declared fields are inspected and set, private ones included (no getters/setters); `getObjFrom` should only be
+  given classes whose fields may all come from the JSON.
 - Nested objects in lists must have a no-arg constructor.
 - `boolean`, `double`, `float`, and `Map` are not supported — they throw `IllegalArgumentException`.
+- `JsonParser` refuses a document (`parse` returns false) nested deeper than 64 levels, with more than 200,000 values,
+  or whose key paths add up to more than 8 million characters (every value stores its full key path).
 
 ---
 

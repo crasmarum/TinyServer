@@ -77,12 +77,19 @@ public abstract class ServerEngine implements Runnable {
 	private boolean isRunning = false;
 	private JanitorThread janitor;
 	private volatile Timer probeFilterTimer;   // set in run(), cancelled by stopServer() on the shutdown-hook thread
+	/** why the accept loop died, or null; see {@link #getFatalError()} */
+	private volatile Throwable fatalError;
 
 	protected Config mConfig = new Config();
 	protected int MAX_REQUEST_LENGTH = 100000000; // 100M
 
 	public int getRunningPort() {
 		return mPort;
+	}
+
+	/** the Throwable that ended the accept loop, or null while it runs or after a normal stopServer() */
+	public Throwable getFatalError() {
+		return fatalError;
 	}
 
 	/**
@@ -257,6 +264,13 @@ public abstract class ServerEngine implements Runnable {
 			} catch (IOException ioex) {
 				ioex.printStackTrace();
 			} catch (Throwable ex) {
+				// The listener cannot carry on (e.g. an OutOfMemoryError while starting a request thread). Record why and
+				// stop, so the launcher can exit non-zero and a supervisor restart us, rather than leave a process running
+				// with a dead port (other threads, such as a janitor's Timer, would keep the JVM alive).
+				fatalError = ex;
+				System.err.println(Log.timestamp() + "\tERROR\tAccept loop failed, stopping the server: " + ex);
+				ex.printStackTrace();
+				Log.error("Accept loop failed, stopping the server: " + ex);
 				stopServer();
 				break;
 			}

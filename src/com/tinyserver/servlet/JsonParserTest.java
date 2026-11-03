@@ -109,6 +109,11 @@ public class JsonParserTest {
         testEmptyKeyListToString();
         testGetObjFromReportsParseFailure();
 
+        // Nesting depth: each level copies its parent's key path, so cost grows with the square of the depth.
+        testNestingDepthLimit();
+        // Long keys over many siblings cost as much as depth: the path and node budgets.
+        testPathAndNodeBudgets();
+
         System.out.println();
         System.out.println("JsonParserTest: " + passed + " passed, " + failed + " failed.");
         System.exit(failed == 0 ? 0 : 1);
@@ -414,5 +419,58 @@ public class JsonParserTest {
             return JsonSerializer.getObjFrom(JsonSerializer.toJson(src), dst)
                     && src.a.equals(dst.a) && dst.n == -7;
         });
+    }
+
+    static String nested(String open, String close, int depth) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < depth; i++) sb.append(open);
+        sb.append("1");
+        for (int i = 0; i < depth; i++) sb.append(close);
+        return sb.toString();
+    }
+
+    static void testNestingDepthLimit() {
+        int max = JsonParser.MAX_DEPTH;
+        check("arrays nested exactly MAX_DEPTH deep parse",
+                new JsonParser().parse(nested("[", "]", max), new JsonObj()));
+        check("objects nested exactly MAX_DEPTH deep parse",
+                new JsonParser().parse(nested("{\"a\":", "}", max), new JsonObj()));
+        check("arrays nested MAX_DEPTH + 1 deep fail",
+                !new JsonParser().parse(nested("[", "]", max + 1), new JsonObj()));
+        check("objects nested MAX_DEPTH + 1 deep fail",
+                !new JsonParser().parse(nested("{\"a\":", "}", max + 1), new JsonObj()));
+        // Before the limit, 16,000 levels (about 96 KB) ran a 400 MB heap out of memory.
+        long t0 = System.nanoTime();
+        check("100,000 levels of objects fail fast instead of exhausting the heap",
+                !new JsonParser().parse(nested("{\"a\":", "}", 100_000), new JsonObj())
+                        && (System.nanoTime() - t0) < 2_000_000_000L);
+        JsonParser reused = new JsonParser();
+        check("a parser that hit the limit parses the next document",
+                !reused.parse(nested("[", "]", max + 1), new JsonObj())
+                        && reused.parse("{\"a\":[1,{\"b\":2}]}", new JsonObj()));
+    }
+
+    static void testPathAndNodeBudgets() {
+        // ~100 KB: one 50,000-char key over 25,000 array items made 25,000 paths of 50,000 chars each
+        String wide = "{\"" + "k".repeat(50_000) + "\":[" + "1,".repeat(24_999) + "1]}";
+        long t0 = System.nanoTime();
+        check("a long key over many array items fails fast (path budget)",
+                !new JsonParser().parse(wide, new JsonObj()) && (System.nanoTime() - t0) < 2_000_000_000L);
+        String many = "[" + "1,".repeat(JsonParser.MAX_NODES) + "1]";
+        check("more than MAX_NODES values fail", !new JsonParser().parse(many, new JsonObj()));
+        String atLimit = "[" + "1,".repeat(JsonParser.MAX_NODES - 2) + "1]";   // the array itself is a node too
+        check("MAX_NODES values in total parse", new JsonParser().parse(atLimit, new JsonObj()));
+        // a large ordinary document: 5,000 objects of 8 short fields (about 1.8 MB)
+        StringBuilder sb = new StringBuilder("{\"messages\":[");
+        for (int i = 0; i < 5000; i++) {
+            if (i > 0) sb.append(',');
+            sb.append("{\"from\":\"user").append(i).append("\",\"to\":\"user7\",\"group\":\"g12\",\"ts\":").append(1793700000000L + i)
+              .append(",\"data\":\"").append("QUJD".repeat(60)).append("\",\"iv\":\"aXZp\",\"type\":\"text\",\"n\":").append(i).append('}');
+        }
+        sb.append("]}");
+        check("a large ordinary document (5,000 objects, 1.8 MB) still parses", new JsonParser().parse(sb.toString(), new JsonObj()));
+        JsonParser reused = new JsonParser();
+        check("a parser that ran out of budget parses the next document",
+                !reused.parse(wide, new JsonObj()) && reused.parse("{\"a\":[1,2]}", new JsonObj()));
     }
 }
