@@ -162,7 +162,11 @@ public class JsonSerializer {
 			}
 		};
 		parser.add_listener(listener);
-		parser.parse(json, new JsonObj());
+		// Malformed or truncated JSON: the fields set so far are only a prefix
+		// of the input, so do not report success.
+		if (!parser.parse(json, new JsonObj())) {
+			return false;
+		}
 		
 		return ret[0];
 	}

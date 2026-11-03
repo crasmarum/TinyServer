@@ -95,10 +95,23 @@ map /TestServlet com.example.web.TestServlet
 | `db_token` | string | — | Server-side secret ("pepper") an application can mix into hashes of tokens it stores, read with `Config.getInstance().getDbToken()` |
 | _anything else_ | string | — | Stored in the servlet context as `key → value`, readable via `Servlet.getFromContext(key)` |
 
-Built in, no configuration: requests for known scanner paths (`.env`, `wp-admin`, `.git`, …) ban the client IP for
-24 hours and close the socket without a response, and so do 20 or more 404s from one IP within 5 minutes
-(class `ProbeFilter`; the ban list lives in memory). Behind a reverse proxy on the same machine or network, the
-client IP is taken from `X-Forwarded-For`.
+Built in, no configuration:
+
+- **Request limits.** The request line must be `METHOD /target HTTP/1.x` (GET, HEAD and POST; other methods get 501).
+  Headers end at an empty line; at most 128 header lines and 128 KB of headers (413). A request with
+  `Transfer-Encoding` (e.g. chunked), two different `Content-Length`s, folded or malformed header lines, or a GET/HEAD
+  with a body is refused with 400 and the connection is closed, so no unread bytes can be taken for the next request
+  on a kept-alive socket (behind a proxy that socket is shared by many users). At most 1,000 parameters per request
+  (query string and form body together, or multipart parts; 413). Malformed `%` escapes give 400.
+- **Scanner filter** (class `ProbeFilter`, in memory). Requests for known scanner paths (`.env`, `wp-admin`, `.git`, …)
+  are dropped without a response and the client is banned for 24 hours; 20 or more 4xx responses within 5 minutes
+  ban it too. An IPv6 client is banned by its /64. A ban is enforced when that client opens a new connection
+  directly; behind a reverse proxy every connection comes from the proxy, so there the filter only drops the probe
+  requests. Both lists are capped at 10,000 entries (the soonest-expiring are evicted) and cleaned up once a minute.
+- **Client address.** When the connection comes from a private or loopback address (a reverse proxy on the same
+  machine or network), the client is the LAST `X-Forwarded-For` entry, the one the proxy appended, and only if it is
+  an IP literal; everything before it is whatever the client sent. Otherwise it is the TCP peer. This address is used
+  in the log and by the scanner filter.
 
 ---
 
@@ -257,7 +270,7 @@ Inside the JSP, read the attribute:
 | Member | Type | Description |
 |--------|------|-------------|
 | `headers` | `Hashtable<String,String>` | HTTP request headers (lower-cased keys) |
-| `parameters` | `Hashtable<String,String>` | Query-string (GET), form (POST `application/x-www-form-urlencoded`) or multipart text fields |
+| `parameters` | `Hashtable<String,String>` | Query string (any method), form (POST `application/x-www-form-urlencoded`) or multipart text fields; at most 1,000 per request |
 | `attributes` | `Hashtable<String,String>` | Arbitrary key/value pairs for inter-servlet communication |
 | `content` | `char[]` | POST body decoded as UTF-8 (empty for multipart requests) |
 | `uploads` | `List<UploadedFile>` | Files of a `multipart/form-data` request, in order: `field()`, `filename()`, `contentType()`, `data()` |
@@ -401,7 +414,7 @@ Log.printStackTrace(exception);
 
 ### Input sanitization
 
-`Log.sanitize(msg)` strips `\n` and `\r` from log messages to prevent log injection. It is called automatically for all `Log.info()` / `Log.debug()` / `Log.error()` calls.
+`Log.sanitize(msg)` removes `\n` and `\r` and replaces other control characters (except TAB, e.g. terminal escape sequences) with `?`, to prevent log injection. It is called automatically for all `Log.info()` / `Log.debug()` / `Log.error()` calls. Logging never blocks a request: entries go through a queue to a writer thread, and if the queue is full the entry is dropped and counted ("N log lines dropped").
 
 ---
 

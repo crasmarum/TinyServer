@@ -102,8 +102,15 @@ public class JsonParserTest {
         // non-ASCII string value.
         testNonAsciiStringParsesAllSubsequentFields();
 
+        // Item 11: MySStream charset, "-0" numbers, toString of an empty
+        // key list, getObjFrom ignoring the parse result.
+        testMySStreamIsUtf8();
+        testNegativeZeroNumbers();
+        testEmptyKeyListToString();
+        testGetObjFromReportsParseFailure();
+
         System.out.println();
-        System.out.println("=== " + passed + " passed, " + failed + " failed ===");
+        System.out.println("JsonParserTest: " + passed + " passed, " + failed + " failed.");
         System.exit(failed == 0 ? 0 : 1);
     }
 
@@ -313,5 +320,99 @@ public class JsonParserTest {
                 "".equals(seen.get("a")));
         check("non-empty value still forwarded unchanged",
                 "x".equals(seen.get("b")));
+    }
+
+    static void testMySStreamIsUtf8() {
+        // Pre-fix str.getBytes() used the JVM default charset: US-ASCII under
+        // -Dfile.encoding=COMPAT on a C locale, which turns 'é' into '?'.
+        // The stream must always carry UTF-8 bytes, whatever the default.
+        MySStream ss = new MySStream("é👍");
+        byte[] want = "é👍".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        check("MySStream holds the UTF-8 bytes of its string",
+                java.util.Arrays.equals(want, ss.stream));
+        JsonParser p = new JsonParser();
+        java.util.Map<String, String> seen = new java.util.HashMap<>();
+        p.add_listener(new JsonListener() {
+            @Override public void on_data(JsonObj.JSON_Type type,
+                                          java.util.List<String> key,
+                                          String value) {
+                seen.put(JsonListener.toString(key), value);
+            }
+        });
+        check("non-ASCII value round-trips through the parser",
+                p.parse("{\"k\":\"café\"}", new JsonObj()) && "café".equals(seen.get("k")));
+    }
+
+    static void testNegativeZeroNumbers() {
+        // Pre-fix read_number demanded a '.' after "-0", rejecting the valid
+        // JSON numbers -0 and -0e1.
+        for (String num : new String[] { "-0", "-0.5", "-0e1", "-0E+1", "-0.0e-2", "0", "-1", "-10.5" }) {
+            JsonParser p = new JsonParser();
+            String[] got = new String[1];
+            p.add_listener(new JsonListener() {
+                @Override public void on_data(JsonObj.JSON_Type type,
+                                              java.util.List<String> key,
+                                              String value) {
+                    got[0] = value;
+                }
+            });
+            check("number " + num + " parses with its text intact",
+                    p.parse("{\"n\":" + num + "}", new JsonObj()) && num.equals(got[0]));
+            check("number " + num + " parses as an array element",
+                    new JsonParser().parse("[" + num + " ]", new JsonObj()));
+        }
+        for (String num : new String[] { "-01", "-", "--1", "-.5", "-0e", "01", "-a" }) {
+            Boolean result = runWithTimeout(3000, () ->
+                    new JsonParser().parse("[" + num + "]", new JsonObj()));
+            check("invalid number " + num + " is rejected", result != null && !result);
+        }
+    }
+
+    static void testEmptyKeyListToString() {
+        // Pre-fix: substring(1) on "" threw StringIndexOutOfBoundsException.
+        check("JsonListener.toString(empty list) is \"\"",
+                () -> "".equals(JsonListener.toString(new java.util.ArrayList<>())));
+        check("JsonListener.toString(one key) unchanged",
+                () -> "a".equals(JsonListener.toString(java.util.List.of("a"))));
+        check("JsonListener.toString(three keys) unchanged",
+                () -> "a:0:b".equals(JsonListener.toString(java.util.List.of("a", "0", "b"))));
+    }
+
+    /** Target for the getObjFrom tests (fields read by reflection). */
+    static class Sample {
+        String a;
+        int n;
+    }
+
+    /** A static final field cannot be set: getObjFrom's listener flags it. */
+    static class Frozen {
+        static final String K = "fixed";
+        String a;
+    }
+
+    static void testGetObjFromReportsParseFailure() {
+        Sample ok = new Sample();
+        check("getObjFrom on valid JSON returns true and sets the fields",
+                () -> JsonSerializer.getObjFrom("{\"object\":\"Sample\",\"a\":\"x\",\"n\":-0}", ok)
+                        && "x".equals(ok.a) && ok.n == 0);
+        // Pre-fix the parser's false result was ignored and a truncated body
+        // reported success with only some fields set.
+        check("getObjFrom on truncated JSON returns false",
+                () -> !JsonSerializer.getObjFrom("{\"object\":\"Sample\",\"a\":\"x\",\"n\":", new Sample()));
+        check("getObjFrom on trailing garbage returns false",
+                () -> !JsonSerializer.getObjFrom("{\"object\":\"Sample\",\"a\":\"x\"} x", new Sample()));
+        check("getObjFrom on a bad number returns false",
+                () -> !JsonSerializer.getObjFrom("{\"object\":\"Sample\",\"n\":01}", new Sample()));
+        // The listener-flagged failure (IllegalAccessException) still gives false.
+        check("getObjFrom still returns false when a field cannot be set",
+                () -> !JsonSerializer.getObjFrom("{\"object\":\"Frozen\",\"K\":\"y\"}", new Frozen()));
+        check("toJson output still round-trips through getObjFrom", () -> {
+            Sample src = new Sample();
+            src.a = "q\"é";
+            src.n = -7;
+            Sample dst = new Sample();
+            return JsonSerializer.getObjFrom(JsonSerializer.toJson(src), dst)
+                    && src.a.equals(dst.a) && dst.n == -7;
+        });
     }
 }

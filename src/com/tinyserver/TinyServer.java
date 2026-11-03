@@ -1,6 +1,7 @@
 package com.tinyserver;
 
 import java.io.BufferedOutputStream;
+import java.io.File;
 import java.io.IOException;
 
 import com.tinyserver.servlet.HTTPRequest;
@@ -22,8 +23,25 @@ public class TinyServer extends ServerEngine {
 		return htmlDirectory;
 	}
 
+	/**
+	 * Stored canonical (absolute, symlinks resolved, no trailing separator) so the traversal guard in
+	 * deliverLocalContent, which compares canonical file paths against {@code htmlDirectory + File.separator},
+	 * also holds for a relative html_dir, one with a trailing slash or one reached through a symlink.
+	 */
 	public static void setHtmlDirectory(String directory) {
-		htmlDirectory = directory;
+		htmlDirectory = canonicalDirectory(directory);
+	}
+
+	/** the canonical form of a configured directory, or its absolute form if it cannot be resolved; null stays null */
+	static String canonicalDirectory(String directory) {
+		if (directory == null) {
+			return null;
+		}
+		try {
+			return new File(directory).getCanonicalPath();
+		} catch (IOException e) {
+			return new File(directory).getAbsolutePath();
+		}
 	}
 	
 	public TinyServer(int port) throws IOException {
@@ -32,10 +50,6 @@ public class TinyServer extends ServerEngine {
 	
 	public TinyServer(String configFile) throws Exception {
 		super(configFile);
-	}
-
-	public String getRepositoryPath() {
-		return getRepositoryLocation().getAbsolutePath();
 	}
 
 	protected void execute(HTTPRequest request, BufferedOutputStream bufferedoutputstream) {

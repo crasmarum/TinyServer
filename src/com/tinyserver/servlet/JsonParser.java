@@ -135,17 +135,10 @@ public class JsonParser {
 	Boolean read_number(MySStream ss, Vector<Character> number) {
 		char ch = (char)ss.get();
 
-		if (ch == '-' && ss.peek() == '0') {
-			number.add(ch);
-			number.add((char)ss.get());
-			if (ss.peek() != '.') {
-				return false;
-			}
-			number.add((char)ss.get());
-			return read_more_numbers(ss, number);
-		}
-
-		if (ch == '-' && is_nz_number((char)ss.peek())) {
+		// "-0" is valid JSON (and so are -0.5 and -0e1): keep the sign and fall
+		// through to the '0' cases below, which reject a digit after the
+		// leading zero ("-01") the same way they reject "01".
+		if (ch == '-' && is_number((char)ss.peek())) {
 			number.add(ch);
 			ch = (char)ss.get();
 		}

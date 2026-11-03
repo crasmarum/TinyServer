@@ -12,6 +12,9 @@ public class JsonListener {
 	}
 	
 	public static String toString(List<String> key) {
+		if (key.isEmpty()) {
+			return "";
+		}
 		StringBuilder sb = new StringBuilder();
 		for (String str : key) {
 			sb.append(COLON).append(str);

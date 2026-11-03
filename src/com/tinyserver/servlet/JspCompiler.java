@@ -235,7 +235,20 @@ public class JspCompiler {
 		return jspDirectory;
 	}
 
+	/**
+	 * Stored canonical (absolute, symlinks resolved, no trailing separator) so the traversal guard in
+	 * HTTPRequest.getServlet, which compares canonical file paths against {@code jspDirectory + File.separator},
+	 * also holds for a relative jsp_dir or one with a trailing slash.
+	 */
 	public static void setDirectory(String jspPath) {
-		jspDirectory = jspPath;
+		if (jspPath == null) {
+			jspDirectory = null;
+			return;
+		}
+		try {
+			jspDirectory = new File(jspPath).getCanonicalPath();
+		} catch (IOException e) {
+			jspDirectory = new File(jspPath).getAbsolutePath();
+		}
 	}
 }
