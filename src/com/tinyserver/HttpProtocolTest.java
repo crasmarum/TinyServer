@@ -109,6 +109,18 @@ public class HttpProtocolTest {
 		}
 	}
 
+	/** a long poll: reads the body, gives it back, then waits ?ms */
+	public static class ParkServlet extends Servlet {
+		@Override
+		public void service(HTTPRequest request, HTTPResponse response) {
+			int len = request.getContent().length();
+			request.releaseBody();
+			try { Thread.sleep(Long.parseLong(request.headers.getOrDefault("x-park-ms", "1500"))); } catch (InterruptedException e) { }
+			response.setContentType("text/plain");
+			response.getOutputStream().writeBytes(("len=" + len + " after=" + request.getContent().length()).getBytes(StandardCharsets.UTF_8));
+		}
+	}
+
 	public static class BoomServlet extends Servlet {
 		@Override
 		public void service(HTTPRequest request, HTTPResponse response) {
@@ -218,6 +230,7 @@ public class HttpProtocolTest {
 					+ "map /content com.tinyserver.HttpProtocolTest$ContentServlet\n"
 					+ "map /boom com.tinyserver.HttpProtocolTest$BoomServlet\n"
 					+ "map /big com.tinyserver.HttpProtocolTest$BigServlet\n"
+					+ "map /park com.tinyserver.HttpProtocolTest$ParkServlet\n"
 					+ "map /error com.tinyserver.HttpProtocolTest$ErrorServlet\n"
 					// a 4 MB body budget (3 MB for bodies over 64 KB) and a 50 KB/s floor, small enough to fill in a test
 					+ "body_budget 4000000\nbody_min_rate 50000\n");
@@ -569,6 +582,18 @@ public class HttpProtocolTest {
 				boolean same = big.body.length == 4 << 20;
 				for (int i = 0; same && i < big.body.length; i++) same = big.body[i] == (byte) (i * 7);
 				check("the 4 MB response, written from its buffer without a copy, arrives intact", big.code() == 200 && same);
+			}
+			// a long poll that gives its body back before it waits holds no budget while it waits
+			try (Socket pk = open()) {
+				pk.setSoTimeout(5000);
+				pk.getOutputStream().write(post("/park", "application/json", hundred, "").getBytes(StandardCharsets.ISO_8859_1));
+				pk.getOutputStream().write(hundred);
+				pk.getOutputStream().flush();
+				Thread.sleep(500);
+				long during = b.used();
+				Resp pr = readResponse(new BufferedInputStream(pk.getInputStream()), false);
+				check("releaseBody(): nothing held while the long poll waits (" + during + "); body gone after it: " + pr.text(),
+						during == 0 && pr.code() == 200 && pr.text().equals("len=100000 after=0"));
 			}
 			byte[] cjkForm = ("a=" + "%E4%B8%AD".repeat(20_000)).getBytes(StandardCharsets.ISO_8859_1);
 			Resp cjk = send(post("/echo", "application/x-www-form-urlencoded", cjkForm, "Connection: close\r\n"), cjkForm);

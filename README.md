@@ -116,7 +116,8 @@ Built in, no configuration:
   form, whose decoding needs more for a moment) in a server-wide budget (`body_budget`, a quarter of the heap by
   default) before any of its body is read, and gives it back when its servlet returns (a POST that long-polls holds it
   until then); 5 copies of a body are alive at once while it is read and handled (bytes, decoded text, `content`, the
-  servlet's `getContent()`). After the servlet returns, the request's body, parameters and uploads are cleared.
+  servlet's `getContent()`). After the servlet returns, the request's body, parameters and uploads are cleared; a
+  servlet that waits after reading its request (a long poll) can give them back earlier with `request.releaseBody()`.
   Bodies over 64 KB may together use at most 3/4 of the budget, so small requests (forms, JSON) always have room.
   A body that does not fit within 2 s gets 503 with `Retry-After: 2`, unread; one bigger than the large share is
   clamped to it and runs alone. The startup log says how many `max_req_len` bodies fit at once, with a warning when
@@ -293,6 +294,7 @@ Inside the JSP, read the attribute:
 | `getUpload(field)` | `UploadedFile` | The first file of a form field, or `null` |
 | `files` | `Hashtable<String, Hashtable<String,byte[]>>` | The same files as field → file name → bytes |
 | `getContent()` | `String` | `content` as a `String` |
+| `releaseBody()` | `void` | Drops the body (`content`, `parameters`, uploads) and gives back its share of the body memory budget. The server does this when the servlet returns; a servlet that waits a long time after reading its request (a long poll) calls it first |
 | `getMethod()` | `String` | The URL path, e.g. `/TestServlet` |
 | `forwardTo(path, response)` | `void` | Dispatch to another servlet or JSP |
 | `getServlet(path)` | `Servlet` | Resolve a path to its `Servlet` instance (rarely called directly) |

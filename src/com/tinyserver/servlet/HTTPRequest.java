@@ -7,6 +7,7 @@ import java.util.Hashtable;
 import java.util.List;
 
 import com.tinyserver.Config;
+import com.tinyserver.ServerEngine;
 import com.tinyserver.servlet.HTTPResponse.HTTPRetCode;
 
 public class HTTPRequest {
@@ -125,6 +126,15 @@ public class HTTPRequest {
 
 	public String getContent() {
 		return new String(content);
+	}
+
+	/**
+	 * Drops this request's body (content, parameters, uploads) and gives back its share of the server's memory budget
+	 * for request bodies. The server does this when the servlet returns; a servlet that waits a long time after reading
+	 * its request (a long poll) calls it first, so the wait holds no budget. Call it on the request's own thread.
+	 */
+	public void releaseBody() {
+		ServerEngine.bodyDone(this);
 	}
 
 	public String getMethod() {

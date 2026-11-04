@@ -705,11 +705,12 @@ public abstract class ServerEngine implements Runnable {
 	}
 
 	/**
-	 * Called once a servlet has returned, before its response is written: the request body is dropped and its
-	 * reservation in the body budget given back, so a client that is slow to read its response (or never reads it)
-	 * does not hold the budget. The request must not be used for its body after this.
+	 * Called once a servlet has returned, before its response is written (or earlier by the servlet itself, through
+	 * {@link HTTPRequest#releaseBody()}): the request body is dropped and its reservation in the body budget given
+	 * back, so a client that is slow to read its response (or never reads it) does not hold the budget. The request
+	 * must not be used for its body after this. Works on the request's own thread.
 	 */
-	protected static void bodyDone(HTTPRequest request) {
+	public static void bodyDone(HTTPRequest request) {
 		request.content = new char[0];
 		request.parameters.clear();
 		request.files.clear();
