@@ -618,6 +618,20 @@ public class HttpProtocolTest {
 			byte[] cjkForm = ("a=" + "%E4%B8%AD".repeat(20_000)).getBytes(StandardCharsets.ISO_8859_1);
 			Resp cjk = send(post("/echo", "application/x-www-form-urlencoded", cjkForm, "Connection: close\r\n"), cjkForm);
 			check("a 180 KB urlencoded form (11 x = 2 MB, within the large pool) is parsed", cjk.code() == 200 && cjk.text().contains("params=1"));
+			// the server charges a form 11 x, a JSON body 5 x: measured while the servlet holds each
+			for (String[] tc : new String[][] {{"application/x-www-form-urlencoded", "11"}, {"application/json", "5"}}) {
+				byte[] f20 = ("a=" + "x".repeat(19_998)).getBytes(StandardCharsets.ISO_8859_1);
+				try (Socket fs = open()) {
+					fs.setSoTimeout(5000);
+					fs.getOutputStream().write(post("/content?ms=800", tc[0], f20, "Connection: close\r\n").getBytes(StandardCharsets.ISO_8859_1));
+					fs.getOutputStream().write(f20);
+					fs.getOutputStream().flush();
+					long seen = 0;
+					for (int i = 0; i < 50 && seen == 0; i++) { Thread.sleep(10); seen = b.used(); }
+					readResponse(new BufferedInputStream(fs.getInputStream()), false);
+					check(tc[0] + ": a 20 KB body is charged " + tc[1] + " x (" + seen + ")", seen == 20_000L * Integer.parseInt(tc[1]));
+				}
+			}
 			check("  budget 0 after the form", budgetEmpty(b));
 
 			// --- many at once: each answered 200 or 503, never more than the budget, all given back
@@ -652,6 +666,7 @@ public class HttpProtocolTest {
 			String log = "";
 			for (File f : dir.listFiles((d, n) -> n.endsWith(".log"))) log += Files.readString(f.toPath());
 			check("startup log line: body budget", log.contains("Body budget: 3.8 MB (bodies over 64 KB: at most 2.9 MB together)"));
+			check("startup log line: body_min_rate from the config", log.contains("bodies must arrive at 50000 bytes/s or more"));
 		} finally {
 			ServerEngine.BODY_WAIT_MS = waitMs;
 			ServerEngine.BODY_GRACE_MS = graceMs;
