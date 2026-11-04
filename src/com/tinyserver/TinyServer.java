@@ -6,6 +6,7 @@ import java.io.IOException;
 
 import com.tinyserver.servlet.HTTPRequest;
 import com.tinyserver.servlet.HTTPResponse;
+import com.tinyserver.servlet.JspCompiler;
 import com.tinyserver.servlet.Log;
 import com.tinyserver.servlet.Servlet;
 
@@ -52,6 +53,12 @@ public class TinyServer extends ServerEngine {
 		super(configFile);
 	}
 
+	/** a body is read only for a mapped servlet or, when jsp_dir is set, a JSP; anything else is static (405) */
+	@Override
+	protected boolean acceptsBody(String path) {
+		return mConfig.hasServlet(path) || (HTTPRequest.isJsp(path) && JspCompiler.getDirectory() != null);
+	}
+
 	protected void execute(HTTPRequest request, BufferedOutputStream bufferedoutputstream) {
 		String method = request.getMethod();
 		try {
@@ -78,6 +85,7 @@ public class TinyServer extends ServerEngine {
 				}
 				long svcStartNs = System.nanoTime();
 				servlet.service(request, response);
+				bodyDone(request);   // the body and its budget reservation are not needed for writing the response
 				long svcMs = (System.nanoTime() - svcStartNs) / 1_000_000L;
 				Log.info("[SERVICE " + method + "] service=" + svcMs + "ms");
 				deliverContent(bufferedoutputstream, response);

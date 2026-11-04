@@ -1,6 +1,8 @@
 package com.tinyserver.servlet;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -29,7 +31,14 @@ public class HTTPResponse {
 	}	
 	
 	HTTPRetCode mRetCode = HTTPRetCode._200;
-	ByteArrayOutputStream mOut = new ByteArrayOutputStream();
+	/** the response body; a ByteArrayOutputStream that can write its bytes out without copying them */
+	static final class Body extends ByteArrayOutputStream {
+		void send(OutputStream out) throws IOException {
+			out.write(buf, 0, count);
+		}
+	}
+
+	Body mOut = new Body();
 	Map<String, String> mHeaders = new TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER);
 
 	String mContentType = "text/html";
@@ -38,6 +47,15 @@ public class HTTPResponse {
 
 	public ByteArrayOutputStream getOutputStream() {
 		return mOut;
+	}
+
+	/**
+	 * Writes the body to {@code out} straight from its buffer. ByteArrayOutputStream.writeTo copies the whole body
+	 * first when called on a virtual thread (to avoid pinning while holding its lock); the body belongs to one request,
+	 * so it needs no lock.
+	 */
+	public void writeBody(OutputStream out) throws IOException {
+		mOut.send(out);
 	}
 	
 	public void setContentType(String contentType) {

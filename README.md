@@ -80,6 +80,8 @@ map /TestServlet com.example.web.TestServlet
 |-----|------|---------|-------------|
 | `port` | int | 8080 | TCP port to listen on |
 | `max_req_len` | int | 100 000 000 | Maximum POST body size in bytes |
+| `body_budget` | bytes | heap / 4 | Memory the request bodies being read or served may hold together (see "Request body memory" below) |
+| `body_min_rate` | bytes/s | 4096 | After a 5 s grace, a request body must keep arriving at least this fast, or it gets 408. `0` turns this off |
 | `use_virtual_threads` | bool | false | Use Java 21 virtual threads per request |
 | `log_file_dir` | path | — | Directory for daily rotating log files. If absent, logs go to stdout |
 | `html_dir` | path | — | Directory for static files. Requests that don't match a servlet are served from here |
@@ -110,6 +112,18 @@ Built in, no configuration:
   ban it too. An IPv6 client is banned by its /64. A ban is enforced when that client opens a new connection
   directly; behind a reverse proxy every connection comes from the proxy, so there the filter only drops the probe
   requests. Both lists are capped at 10,000 entries (the soonest-expiring are evicted) and cleaned up once a minute.
+- **Request body memory.** A POST reserves 5 × its Content-Length (11 × for an `application/x-www-form-urlencoded`
+  form, whose decoding needs more for a moment) in a server-wide budget (`body_budget`, a quarter of the heap by
+  default) before any of its body is read, and gives it back when its servlet returns (a POST that long-polls holds it
+  until then); 5 copies of a body are alive at once while it is read and handled (bytes, decoded text, `content`, the
+  servlet's `getContent()`). After the servlet returns, the request's body, parameters and uploads are cleared.
+  Bodies over 64 KB may together use at most 3/4 of the budget, so small requests (forms, JSON) always have room.
+  A body that does not fit within 2 s gets 503 with `Retry-After: 2`, unread; one bigger than the large share is
+  clamped to it and runs alone. The startup log says how many `max_req_len` bodies fit at once, with a warning when
+  only one does. A POST with a body to a path no servlet or JSP takes gets 405, unread. A body that falls behind
+  `body_min_rate` after its 5 s grace gets 408 (not counted by the scanner filter). Not counted in the budget: what a
+  servlet allocates while it works (a decoded image, a JSON tree), responses, and per-connection buffers. One log line
+  a minute reports 503s, 408s and the peak, when there were any or the peak passed half the budget.
 - **Client address.** When the connection comes from a private or loopback address (a reverse proxy on the same
   machine or network), the client is the LAST `X-Forwarded-For` entry, the one the proxy appended, and only if it is
   an IP literal; everything before it is whatever the client sent. Otherwise it is the TCP peer. This address is used
@@ -300,7 +314,8 @@ public void service(HTTPRequest request, HTTPResponse response) {
 }
 ```
 
-The whole body is held in memory (at most `max_req_len` bytes), so set `max_req_len` to the largest upload you accept.
+The whole body is held in memory (at most `max_req_len` bytes), so set `max_req_len` to the largest upload you accept;
+uploads reserve 5 × their size in the body budget while they are read and served (see §2, "Request body memory").
 Tests: `MultipartTest` (parser cases, plus end to end against a running server: a 3 MB binary file, curl `-F`,
 keep-alive after an upload, malformed bodies).
 

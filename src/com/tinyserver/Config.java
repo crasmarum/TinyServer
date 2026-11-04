@@ -18,6 +18,10 @@ public class Config {
 	public static final String INJECT = "inject";
 	public static final String STATIC_INJECT = "static_inject";
 	public static final String MAX_REQ_LEN = "max_req_len";
+	/** bytes the request bodies being read or served may hold together; default a quarter of the heap. See BodyBudget. */
+	public static final String BODY_BUDGET = "body_budget";
+	/** slowest a request body may arrive, in bytes a second after a 5 s grace (default 4096; 0 = no limit) */
+	public static final String BODY_MIN_RATE = "body_min_rate";
 	public static final String USE_VIRT_THREADS = "use_virtual_threads";
 	public static final String KEEP_CONNECTION_ALIVE = "keep_connection_alive";
 	public static final String HEALTHZ_TOKEN = "healthz_token";
@@ -42,6 +46,10 @@ public class Config {
 	Map<String, Object> mStaticInject = new HashMap<>();
 	int mPort = 8080;
 	int mMaxReqLen = 100000000;
+	/** body_budget in bytes, or -1 for a quarter of the heap */
+	long bodyBudget = -1;
+	/** body_min_rate in bytes a second; 0 turns the body deadline off */
+	int bodyMinRate = 4096;   // 32 kbit/s: a 64 kbit/s phone (about 7 KB/s after TCP and TLS) keeps up with room to spare
 	boolean useVirtualThreads = false;
 	/**
 	 * When true, the server speaks HTTP/1.1 + per-request keep-alive: a single
@@ -190,6 +198,10 @@ public class Config {
 			mPort = Integer.parseInt(tokens[1]);
 		} else if (MAX_REQ_LEN.equals(tokens[0]) && tokens.length == 2) {
 			mMaxReqLen = Integer.parseInt(tokens[1]);
+		} else if (BODY_BUDGET.equals(tokens[0]) && tokens.length == 2) {
+			bodyBudget = Long.parseLong(tokens[1]);
+		} else if (BODY_MIN_RATE.equals(tokens[0]) && tokens.length == 2) {
+			bodyMinRate = Math.max(0, Integer.parseInt(tokens[1]));
 		} else if (USE_VIRT_THREADS.equals(tokens[0]) && tokens.length == 2) {
 			useVirtualThreads = Boolean.parseBoolean(tokens[1]);
 		} else if (KEEP_CONNECTION_ALIVE.equals(tokens[0]) && tokens.length == 2) {
@@ -263,6 +275,11 @@ public class Config {
 		return alwaysCompileJsps;
 	}
 	
+	/** whether a servlet is mapped at exactly {@code path} */
+	public boolean hasServlet(String path) {
+		return mPathToClass.containsKey(path);
+	}
+
 	public Servlet getServlet(String path) {
 		String clazz = mPathToClass.get(path);
 		if (clazz == null) {

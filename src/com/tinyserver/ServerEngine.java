@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.StringTokenizer;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.TimeUnit;
 
 import com.tinyserver.servlet.HTTPRequest;
 import com.tinyserver.servlet.HTTPResponse;
@@ -83,6 +84,46 @@ public abstract class ServerEngine implements Runnable {
 	protected Config mConfig = new Config();
 	protected int MAX_REQUEST_LENGTH = 100000000; // 100M
 
+	/** what the request bodies being read or served may hold together; see {@link BodyBudget} */
+	private final BodyBudget bodyBudget;
+	/** body_min_rate: after {@link #BODY_GRACE_MS}, a body must keep arriving at this many bytes a second; 0 = no limit */
+	private final int bodyMinRate;
+	/** longest wait for room in the body budget before answering 503 */
+	static long BODY_WAIT_MS = 2000;
+	/** grace before a request body must keep up with body_min_rate (byte k is due by grace + k / rate); else 408 */
+	static long BODY_GRACE_MS = 5000;
+	/**
+	 * One request's reservation in the body budget, given back once: when its servlet has returned (see
+	 * {@link #bodyDone}), or at the latest when the request ends.
+	 */
+	private static final class Reservation {
+		final BodyBudget budget;
+		final long charge;
+		final boolean large;
+		boolean released;
+
+		Reservation(BodyBudget budget, long charge, boolean large) {
+			this.budget = budget;
+			this.charge = charge;
+			this.large = large;
+		}
+
+		void release() {
+			if (!released) {
+				released = true;
+				budget.release(charge, large);
+			}
+		}
+	}
+
+	/** the reservation of the request this thread is serving, or null */
+	private static final ThreadLocal<Reservation> reservation = new ThreadLocal<>();
+
+	/** after a 405 or 503 for an unread body, at most this much of the body is read and dropped ... */
+	static int DRAIN_MAX = 256 * 1024;
+	/** ... for at most this long, so the answer is not destroyed by the reset a close with unread data causes */
+	static int DRAIN_MS = 1000;
+
 	public int getRunningPort() {
 		return mPort;
 	}
@@ -124,16 +165,39 @@ public abstract class ServerEngine implements Runnable {
 
 	protected static void sendContentHeader(BufferedOutputStream bufferedoutputstream, int code, String contentType,
 			long contentLength, long lastModified, String cacheControl) throws IOException {
+		sendContentHeader(bufferedoutputstream, code, contentType, contentLength, lastModified, cacheControl, "");
+	}
+
+	/** as above, with {@code extraHeaders} (header lines, each ending in CRLF, or "") before the blank line */
+	protected static void sendContentHeader(BufferedOutputStream bufferedoutputstream, int code, String contentType,
+			long contentLength, long lastModified, String cacheControl, String extraHeaders) throws IOException {
 		closeAfterResponse.set(Boolean.TRUE);   // the header below tells the client this connection ends here
 		bufferedoutputstream.write(("HTTP/1.0 " + code
-				+ " OK\r\n" + "Date: " + httpDate(System.currentTimeMillis()) + "\r\n"
+				+ " " + reasonPhrase(code) + "\r\n" + "Date: " + httpDate(System.currentTimeMillis()) + "\r\n"
 				+ "Server: Tinyserver/1.0\r\n"
 				+ "Content-Type: " + contentType + "\r\n"
 				+ "Connection: close\r\n"
 				+ (cacheControl != null ? "Cache-Control: " + cacheControl + "\r\n" : "")
 				+ staticHeaders
+				+ extraHeaders
 				+ (contentLength == -1L ? "" : "Content-Length: " + contentLength + "\r\n")
 				+ "Last-modified: " + httpDate(lastModified) + "\r\n" + "\r\n").getBytes());
+	}
+
+	/** the reason phrase for the status codes the server itself sends ("OK" for the rest) */
+	static String reasonPhrase(int code) {
+		switch (code) {
+			case 400: return "Bad Request";
+			case 403: return "Forbidden";
+			case 404: return "Not Found";
+			case 405: return "Method Not Allowed";
+			case 408: return "Request Timeout";
+			case 413: return "Content Too Large";
+			case 500: return "Internal Server Error";
+			case 501: return "Not Implemented";
+			case 503: return "Service Unavailable";
+			default: return "OK";
+		}
 	}
 
 	protected static void sendNotModifiedContentHeader(BufferedOutputStream bufferedoutputstream, String contentType,
@@ -204,13 +268,17 @@ public abstract class ServerEngine implements Runnable {
 			setupJanitorThread(janitor);
 		}
 
-		// Expired bans and 4xx windows are dropped here once a minute, off the accept thread.
+		// Expired bans and 4xx windows are dropped here once a minute, off the accept thread; the body budget reports.
 		probeFilterTimer = new Timer("ProbeFilter-cleanup", true);
 		probeFilterTimer.schedule(new TimerTask() {
 			@Override
 			public void run() {
 				try {
 					ProbeFilter.getInstance().cleanup();
+					String budget = bodyBudget.report();
+					if (budget != null) {
+						Log.info(budget);
+					}
 				} catch (RuntimeException e) {   // an escaped exception would cancel the Timer for good
 					Log.printStackTrace(e);
 				}
@@ -405,7 +473,7 @@ public abstract class ServerEngine implements Runnable {
 		currentClientIp.set(ip);
 		try {
 			// bytes, not a Reader: request bodies (file uploads) must arrive undecoded, see LineInputStream
-			input = new LineInputStream(clientSocketIn);
+			input = new LineInputStream(clientSocketIn, clientSocket);
 			bufferedoutputstream = new BufferedOutputStream(clientSocketOut);
 			// HTTP/1.1 keep-alive: loop handling requests on the same socket
 			// until the client (or this side, via Connection: close) decides
@@ -415,6 +483,13 @@ public abstract class ServerEngine implements Runnable {
 			while (keepAlive) {
 				keepAlive = performHTMLprotocol(input, bufferedoutputstream, ip);
 			}
+		} catch (BodyNotReadException e) {
+			Log.info(e.code + " for a body of " + e.contentLength + " bytes, not read: " + e.getMessage());
+			rejectUnread(clientSocket, input, bufferedoutputstream, e);
+		} catch (BodyTimeoutException e) {
+			Log.info(e.getMessage());
+			bodyBudget.countSlow();
+			sendError(bufferedoutputstream, 408, e.getMessage(), "", e.stalled());   // slow, not hostile: counted only if nothing came
 		} catch (SocketTimeoutException e) {
 			sendError(bufferedoutputstream, 500, "Timeout: " + e.getMessage());
 			Log.info("SocketTimeoutException");
@@ -558,34 +633,99 @@ public abstract class ServerEngine implements Runnable {
 		}
 
 		int params = q < 0 ? 0 : extractParameters(target.substring(q + 1), request.parameters, 0);
-		if (post) {
-			readPostBody(request, contentLength, params, input, bufferedoutputstream);
-		} else if (contentLength > 0) {
+		if (!post && contentLength > 0) {
 			// a body has no meaning on GET/HEAD and must never stay unread on a kept-alive (proxy-shared) socket
 			throw new MalformedRequestException("A GET or HEAD request cannot carry a body.");
 		}
 
-		// Standard HTTP/1.1 keep-alive determination from the request:
-		//   HTTP/1.1 + no "Connection: close" → keep-alive.
-		//   HTTP/1.0 + explicit "Connection: keep-alive" → keep-alive.
-		//   Otherwise → close.
-		// The Config.keepConnectionAlive flag is a hard kill-switch — when
-		// false we always close, which reverts to the legacy HTTP/1.0
-		// behaviour regardless of what the client requested.
-		String conn = request.headers.get("connection");
-		boolean wantsClose     = conn != null && conn.toLowerCase().contains("close");
-		boolean wantsKeepAlive = conn != null && conn.toLowerCase().contains("keep-alive");
-		request.keepAlive = mConfig.keepConnectionAlive
-				&& !wantsClose
-				&& (http11 || wantsKeepAlive);
-
-		Log.info("Request accepted for: " + effectiveIp);
-		execute(request, bufferedoutputstream);
-		if (head) {
-			bufferedoutputstream.flush();   // push the headers held in the HEAD wrapper through to the socket
+		// A body is refused before any of it is read when it is too big, when no servlet would read it, or when the
+		// body budget has no room for it within BODY_WAIT_MS; otherwise its reservation is held until its servlet has
+		// returned (bodyDone), or at the latest until the finally below, whatever happens in between.
+		long bodyLength = post ? Math.max(contentLength, 0) : 0;
+		if (post) {
+			Log.info("CONTENT_LENGTH: " + bodyLength);
 		}
-		// Keep reading from this socket only if the response we actually sent left it open.
-		return request.keepAlive && !closeAfterResponse.get();
+		if (bodyLength >= MAX_REQUEST_LENGTH) {
+			throw new RequestTooBigException("Request size bigger than: " + MAX_REQUEST_LENGTH);
+		}
+		if (bodyLength > 0 && !acceptsBody(path)) {
+			throw new BodyNotReadException(405, "This address does not take a request body.", "Allow: GET, HEAD\r\n", bodyLength);
+		}
+		boolean large = BodyBudget.isLarge(bodyLength);
+		String type = request.headers.get(CONTENT_TYPE);
+		boolean form = type != null && type.trim().startsWith(CONTENT_TYPE_FORM_URLENCODED);
+		long charge = bodyLength > 0 ? bodyBudget.chargeFor(bodyLength, form) : 0;
+		Reservation held = null;
+		if (charge > 0) {
+			boolean granted;
+			try {
+				granted = bodyBudget.acquire(charge, large, BODY_WAIT_MS);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				granted = false;
+			}
+			if (!granted) {
+				throw new BodyNotReadException(503, "Server busy, try again shortly.", "Retry-After: 2\r\n", bodyLength);
+			}
+			held = new Reservation(bodyBudget, charge, large);
+		}
+		reservation.set(held);
+		try {
+			if (post) {
+				readPostBody(request, bodyLength, params, input, bufferedoutputstream);
+			}
+
+			// Standard HTTP/1.1 keep-alive determination from the request:
+			//   HTTP/1.1 + no "Connection: close" → keep-alive.
+			//   HTTP/1.0 + explicit "Connection: keep-alive" → keep-alive.
+			//   Otherwise → close.
+			// The Config.keepConnectionAlive flag is a hard kill-switch — when
+			// false we always close, which reverts to the legacy HTTP/1.0
+			// behaviour regardless of what the client requested.
+			String conn = request.headers.get("connection");
+			boolean wantsClose     = conn != null && conn.toLowerCase().contains("close");
+			boolean wantsKeepAlive = conn != null && conn.toLowerCase().contains("keep-alive");
+			request.keepAlive = mConfig.keepConnectionAlive
+					&& !wantsClose
+					&& (http11 || wantsKeepAlive);
+
+			Log.info("Request accepted for: " + effectiveIp);
+			execute(request, bufferedoutputstream);
+			if (head) {
+				bufferedoutputstream.flush();   // push the headers held in the HEAD wrapper through to the socket
+			}
+			// Keep reading from this socket only if the response we actually sent left it open.
+			return request.keepAlive && !closeAfterResponse.get();
+		} finally {
+			reservation.remove();
+			if (held != null) {
+				held.release();
+			}
+		}
+	}
+
+	/**
+	 * Called once a servlet has returned, before its response is written: the request body is dropped and its
+	 * reservation in the body budget given back, so a client that is slow to read its response (or never reads it)
+	 * does not hold the budget. The request must not be used for its body after this.
+	 */
+	protected static void bodyDone(HTTPRequest request) {
+		request.content = new char[0];
+		request.parameters.clear();
+		request.files.clear();
+		request.uploads.clear();
+		Reservation r = reservation.get();
+		if (r != null) {
+			r.release();
+		}
+	}
+
+	/**
+	 * Whether a POST to {@code path} may carry a body. A body nobody would read is refused (405) before it is read;
+	 * true here, TinyServer narrows it to mapped servlets and JSPs.
+	 */
+	protected boolean acceptsBody(String path) {
+		return true;
 	}
 
 	protected abstract void execute(HTTPRequest request, BufferedOutputStream bufferedoutputstream) throws IOException;
@@ -678,24 +818,20 @@ public abstract class ServerEngine implements Runnable {
 
 	private void readPostBody(HTTPRequest request, long contentLength, int params, LineInputStream input, BufferedOutputStream out)
 			throws IOException {
-		if (contentLength < 0) {
-			contentLength = 0;   // no Content-Length and (refused) no Transfer-Encoding: no body
-		}
+		// contentLength: 0 or more, below MAX_REQUEST_LENGTH, and room for it reserved in the body budget (see
+		// performHTMLprotocol); no Content-Length and (refused) no Transfer-Encoding means no body.
 
-		Log.info("CONTENT_LENGTH: " + contentLength);
-		if (contentLength >= MAX_REQUEST_LENGTH) {
-			throw new RequestTooBigException("Request size bigger than: " + MAX_REQUEST_LENGTH);
-		}
-
-		// HTTP/1.1 clients such as curl announce larger bodies with "Expect: 100-continue" and wait for this go-ahead.
+		// HTTP/1.1 clients such as curl announce larger bodies with "Expect: 100-continue" and wait for this go-ahead,
+		// sent only now that the body has room in the budget.
 		String expect = request.headers.get("expect");
 		if (expect != null && expect.toLowerCase().contains("100-continue")) {
 			out.write("HTTP/1.1 100 Continue\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
 			out.flush();
 		}
 
-		// The body as exactly Content-Length raw bytes (Content-Length counts bytes).
-		byte[] body = input.readFully((int) contentLength);
+		// The body as exactly Content-Length raw bytes (Content-Length counts bytes), at body_min_rate or faster after
+		// a grace period, so a stalled or trickling client cannot hold its reservation for long.
+		byte[] body = input.readFully((int) contentLength, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(BODY_GRACE_MS), bodyMinRate);
 
 		// content-type=multipart/form-data; boundary=----------Rjt4DIrIlBxobYSOFrQCdr
 		String contentType = (String) request.headers.get(CONTENT_TYPE);
@@ -705,10 +841,13 @@ public abstract class ServerEngine implements Runnable {
 			return;
 		}
 
-		request.content = new String(body, StandardCharsets.UTF_8).toCharArray();
+		// one decode, shared by content and the form parameters; the bytes can go before the char[] copy is made
+		String text = new String(body, StandardCharsets.UTF_8);
+		body = null;
+		request.content = text.toCharArray();
 
 		if (contentType != null && contentType.trim().startsWith(CONTENT_TYPE_FORM_URLENCODED)) {
-			extractParameters(new String(request.content), request.parameters, params);
+			extractParameters(text, request.parameters, params);
 		}
 	}
 
@@ -765,7 +904,7 @@ public abstract class ServerEngine implements Runnable {
 				+ "\r\n" + "\r\n").getBytes());
 
 		long writeStartNs = System.nanoTime();
-		bufferedoutputstream.write(response.getOutputStream().toByteArray());
+		response.writeBody(bufferedoutputstream);   // straight from the response buffer, no copy
 		bufferedoutputstream.flush();
 		long writeMs = (System.nanoTime() - writeStartNs) / 1_000_000L;
 		// Single line per response, easy to grep. If `write` is multi-second
@@ -891,23 +1030,68 @@ public abstract class ServerEngine implements Runnable {
 		// 4xx responses inside the rolling window auto-bans the caller.
 		// Only count 4xx; 5xx is our fault and shouldn't penalise the
 		// client.
-		if (errCode >= 400 && errCode < 500) {
-			ProbeFilter.getInstance().recordError(currentClientIp.get());
-		}
-		closeAfterResponse.set(Boolean.TRUE);   // the stream is closed below
+		sendError(bufferedoutputstream, errCode, errMsg, "", errCode >= 400 && errCode < 500);
+	}
+
+	/**
+	 * An error response with {@code extraHeaders} (header lines ending in CRLF, or ""), counted against the client by
+	 * ProbeFilter only if {@code countAsProbe}; then the stream is closed.
+	 */
+	static void sendError(BufferedOutputStream bufferedoutputstream, int errCode, String errMsg, String extraHeaders,
+			boolean countAsProbe) {
+		writeError(bufferedoutputstream, errCode, errMsg, extraHeaders, countAsProbe);
 		try {
-			byte[] msg = errMsg.getBytes(StandardCharsets.UTF_8);
-			sendContentHeader(bufferedoutputstream, errCode, "text/plain", msg.length, System.currentTimeMillis());
-			bufferedoutputstream.write(msg);
-			bufferedoutputstream.flush();
 			bufferedoutputstream.close();
 		} catch (IOException ignored) {
+		}
+	}
+
+	private static void writeError(BufferedOutputStream bufferedoutputstream, int errCode, String errMsg, String extraHeaders,
+			boolean countAsProbe) {
+		if (countAsProbe) {
+			ProbeFilter.getInstance().recordError(currentClientIp.get());
+		}
+		closeAfterResponse.set(Boolean.TRUE);   // the stream is closed after this
+		try {
+			byte[] msg = errMsg.getBytes(StandardCharsets.UTF_8);
+			sendContentHeader(bufferedoutputstream, errCode, "text/plain", msg.length, System.currentTimeMillis(), null, extraHeaders);
+			bufferedoutputstream.write(msg);
+			bufferedoutputstream.flush();
+		} catch (IOException ignored) {
+		}
+	}
+
+	/**
+	 * Answers a request whose body was not read (405, 503; 4xx counted by ProbeFilter as usual), ends our side of the
+	 * connection, then reads and drops up to {@link #DRAIN_MAX} bytes of the body for at most {@link #DRAIN_MS}: a
+	 * socket closed with unread data sends a reset, which can destroy the answer before the client has read it. A
+	 * bigger body is cut off there (that client may see a reset instead); doIO closes the socket.
+	 */
+	private static void rejectUnread(Socket socket, LineInputStream input, BufferedOutputStream out, BodyNotReadException e) {
+		writeError(out, e.code, e.getMessage(), e.extraHeaders, e.code >= 400 && e.code < 500);
+		try {
+			socket.shutdownOutput();
+			socket.setSoTimeout(DRAIN_MS);
+			long left = Math.min(e.contentLength, DRAIN_MAX);
+			long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DRAIN_MS);
+			byte[] scratch = new byte[8192];
+			while (left > 0 && System.nanoTime() < until) {
+				int r = input.read(scratch, 0, (int) Math.min(scratch.length, left));
+				if (r < 0) {
+					break;
+				}
+				left -= r;
+			}
+		} catch (IOException ignored) {
+			// timed out or reset: nothing more to do
 		}
 	}
 
 	public ServerEngine(int port) throws IOException {
 		mServerSocket = new ServerSocket(port);
 		mPort = port;
+		bodyBudget = new BodyBudget(BodyBudget.defaultTotal());
+		bodyMinRate = mConfig.bodyMinRate;
 
 		setRunning(true);
 	}
@@ -918,11 +1102,19 @@ public abstract class ServerEngine implements Runnable {
 		mServerSocket = new ServerSocket(mPort);
 		MAX_REQUEST_LENGTH = mConfig.mMaxReqLen;
 		staticHeaders = mConfig.crossOriginIsolation ? ISOLATION_HEADERS : "";
+		bodyBudget = new BodyBudget(mConfig.bodyBudget > 0 ? mConfig.bodyBudget : BodyBudget.defaultTotal());
+		bodyMinRate = mConfig.bodyMinRate;
 
 		Log.info("MAX_REQUEST_LENGTH :" + MAX_REQUEST_LENGTH);
 		Log.info("PORT :" + mPort);
+		Log.info(bodyBudget.describe(MAX_REQUEST_LENGTH) + "; bodies must arrive at " + bodyMinRate + " bytes/s or more");
 
 		setRunning(true);
+	}
+
+	/** the body budget, for tests */
+	BodyBudget bodyBudget() {
+		return bodyBudget;
 	}
 
 	private synchronized boolean isRunning() {

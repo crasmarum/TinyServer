@@ -11,6 +11,8 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.TreeMap;
 import java.util.regex.Pattern;
@@ -76,6 +78,48 @@ public class HttpProtocolTest {
 			response.setContentType("text/plain\r\nX-Injected: 1");
 			response.getHeaders().put("X-Note", "a\r\nX-Injected2: 2");
 			response.getOutputStream().writeBytes("crlf".getBytes(StandardCharsets.UTF_8));
+		}
+	}
+
+	/** the body it got: length in chars and a SHA-256 of its UTF-8 bytes; ?ms=n holds the request that long first */
+	public static class ContentServlet extends Servlet {
+		@Override
+		public void service(HTTPRequest request, HTTPResponse response) {
+			try {
+				String ms = request.parameters.get("ms");
+				if (ms != null) Thread.sleep(Long.parseLong(ms));
+				String c = request.getContent();
+				byte[] h = java.security.MessageDigest.getInstance("SHA-256").digest(c.getBytes(StandardCharsets.UTF_8));
+				response.setContentType("text/plain");
+				response.getOutputStream().writeBytes(("len=" + c.length() + " sha=" + java.util.HexFormat.of().formatHex(h)).getBytes(StandardCharsets.UTF_8));
+			} catch (Exception e) {
+				throw new IllegalStateException(e);
+			}
+		}
+	}
+
+	/** a 4 MB response: byte i is (i * 7) & 0xff */
+	public static class BigServlet extends Servlet {
+		@Override
+		public void service(HTTPRequest request, HTTPResponse response) {
+			byte[] b = new byte[4 << 20];
+			for (int i = 0; i < b.length; i++) b[i] = (byte) (i * 7);
+			response.setContentType("application/octet-stream");
+			response.getOutputStream().writeBytes(b);
+		}
+	}
+
+	public static class BoomServlet extends Servlet {
+		@Override
+		public void service(HTTPRequest request, HTTPResponse response) {
+			throw new IllegalStateException("servlet failed");
+		}
+	}
+
+	public static class ErrorServlet extends Servlet {
+		@Override
+		public void service(HTTPRequest request, HTTPResponse response) {
+			throw new AssertionError("an Error in a servlet");
 		}
 	}
 
@@ -170,7 +214,13 @@ public class HttpProtocolTest {
 					+ "map /echo com.tinyserver.HttpProtocolTest$EchoServlet\n"
 					+ "map /json com.tinyserver.HttpProtocolTest$JsonServlet\n"
 					+ "map /png com.tinyserver.HttpProtocolTest$PngServlet\n"
-					+ "map /crlf com.tinyserver.HttpProtocolTest$CrlfServlet\n");
+					+ "map /crlf com.tinyserver.HttpProtocolTest$CrlfServlet\n"
+					+ "map /content com.tinyserver.HttpProtocolTest$ContentServlet\n"
+					+ "map /boom com.tinyserver.HttpProtocolTest$BoomServlet\n"
+					+ "map /big com.tinyserver.HttpProtocolTest$BigServlet\n"
+					+ "map /error com.tinyserver.HttpProtocolTest$ErrorServlet\n"
+					// a 4 MB body budget (3 MB for bodies over 64 KB) and a 50 KB/s floor, small enough to fill in a test
+					+ "body_budget 4000000\nbody_min_rate 50000\n");
 			try {
 				return new TinyServer(cfg.getPath());
 			} catch (BindException taken) {
@@ -210,6 +260,7 @@ public class HttpProtocolTest {
 		try {
 			endToEnd(html);
 			logLines(dir);
+			bodyBudget(server, dir);
 		} finally {
 			server.stopServer();
 		}
@@ -286,6 +337,279 @@ public class HttpProtocolTest {
 		}
 		check("log names the last XFF entry", log.contains("Request accepted for: 5.6.7.8"));
 		check("log never echoes the raw XFF header", !log.contains("1.2.3.4") && !log.contains("forged-name-xyz"));
+	}
+
+	/** waits up to 2 s for the budget to be empty again (a reservation is released when its servlet returns) */
+	static boolean budgetEmpty(BodyBudget b) throws InterruptedException {
+		for (int i = 0; i < 200 && b.used() != 0; i++) Thread.sleep(10);
+		return b.used() == 0 && b.usedLarge() == 0;
+	}
+
+	static String post(String path, String type, byte[] body, String extra) {
+		return "POST " + path + " HTTP/1.1\r\nHost: x\r\n" + (type != null ? "Content-Type: " + type + "\r\n" : "")
+				+ "Content-Length: " + body.length + "\r\n" + extra + "\r\n";
+	}
+
+	/** sends head then body on a fresh socket and reads one response */
+	static Resp send(String head, byte[] body) throws IOException {
+		try (Socket s = open()) {
+			OutputStream o = s.getOutputStream();
+			o.write(head.getBytes(StandardCharsets.ISO_8859_1));
+			o.write(body);
+			o.flush();
+			return readResponse(new BufferedInputStream(s.getInputStream()), false);
+		}
+	}
+
+	static String sha(byte[] utf8, int chars) throws Exception {
+		return "len=" + chars + " sha=" + java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(utf8));
+	}
+
+	/**
+	 * The request-body memory budget end to end (budget 4 MB, 3 MB of it for bodies over 64 KB; body_min_rate 50 KB/s):
+	 * bodies arrive intact, a full budget answers 503 while small requests still get through, slow bodies get 408, a
+	 * body nobody reads gets 405 without being read, and every way a request can end gives its reservation back.
+	 */
+	static void bodyBudget(TinyServer server, File dir) throws Exception {
+		BodyBudget b = server.bodyBudget();
+		long waitMs = ServerEngine.BODY_WAIT_MS, graceMs = ServerEngine.BODY_GRACE_MS;
+		ServerEngine.BODY_WAIT_MS = 300;
+		ServerEngine.BODY_GRACE_MS = 500;
+		ProbeFilter pf = ProbeFilter.getInstance();
+		try {
+			check("budget from the config: " + b.total(), b.total() == 4_000_000 && b.largeCap() == 3_000_000);
+
+			// --- bodies arrive intact through the exact-length read and the single decode
+			StringBuilder json = new StringBuilder("{\"t\":\"");
+			while (json.length() < 100_000) json.append("é中x\\\" ");
+			json.append("\"}");
+			byte[] jb = json.toString().getBytes(StandardCharsets.UTF_8);
+			Resp jr = send(post("/content", "application/json", jb, "Connection: close\r\n"), jb);
+			check("100 KB JSON with non-ASCII arrives intact: " + jr.text(), jr.code() == 200 && jr.text().equals(sha(jb, json.length())));
+			String form = "a=" + "x".repeat(60_000) + "&b=%C3%A9&c=" + "y".repeat(40_000);
+			Resp fr = send(post("/echo", "application/x-www-form-urlencoded", form.getBytes(StandardCharsets.UTF_8), "Connection: close\r\n"),
+					form.getBytes(StandardCharsets.UTF_8));
+			check("100 KB form: parameters from the one decode", fr.code() == 200 && fr.text().contains("params=3") && fr.text().contains("b=é\n"));
+			check("budget back to 0 after normal requests", budgetEmpty(b));
+
+			// --- a full large pool: 4 bodies of 150 KB (750 KB each) that send their headers and then nothing; a 3 s grace
+			// keeps them for the checks below
+			ServerEngine.BODY_GRACE_MS = 3000;
+			List<Socket> holders = new ArrayList<>();
+			long tHold = System.nanoTime();
+			for (int i = 0; i < 4; i++) {
+				Socket h = open();
+				h.getOutputStream().write(("POST /content HTTP/1.1\r\nX-Forwarded-For: 198.51.100.2" + i
+						+ "\r\nContent-Length: 150000\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1));
+				h.getOutputStream().flush();
+				holders.add(h);
+			}
+			for (int i = 0; i < 100 && b.usedLarge() < 3_000_000; i++) Thread.sleep(10);
+			check("4 stalled 150 KB bodies hold the large pool: " + b.usedLarge(), b.usedLarge() == 3_000_000);
+
+			int busyBefore = pf.errorCount("198.51.100.30");
+			long t0 = System.nanoTime();
+			Resp busy = exchange("POST /content HTTP/1.1\r\nX-Forwarded-For: 198.51.100.30\r\nContent-Length: 150000\r\n\r\n");
+			long busyMs = (System.nanoTime() - t0) / 1_000_000;
+			check("a fifth large body: 503 after the wait (" + busyMs + " ms): " + busy.status, busy.code() == 503 && busyMs >= 250 && busyMs < 1500
+					&& busy.status.endsWith("Service Unavailable"));
+			check("503 says when to retry", "2".equals(busy.h("retry-after")));
+			check("a 503 is not counted against the client", pf.errorCount("198.51.100.30") == busyBefore);
+
+			// after a 503 the server keeps reading (and dropping) the body for a while instead of closing at once,
+			// so a client still sending is not reset before it has read the answer
+			try (Socket d = open()) {
+				OutputStream o = d.getOutputStream();
+				o.write("POST /content HTTP/1.1\r\nContent-Length: 300000\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
+				o.flush();
+				Resp dr = readResponse(new BufferedInputStream(d.getInputStream()), false);
+				int wrote = 0;
+				try {
+					for (int i = 0; i < 8; i++) { o.write(new byte[16_384]); o.flush(); wrote++; Thread.sleep(50); }
+				} catch (IOException reset) {
+				}
+				check("503, then the body is still taken for a while (" + wrote + "/8 writes of 16 KB)", dr.code() == 503 && wrote == 8);
+			}
+
+			byte[] hundred = new byte[100_000];
+			java.util.Arrays.fill(hundred, (byte) 'z');
+			Resp sent = send(post("/content", "text/plain", hundred, "X-Forwarded-For: 198.51.100.31\r\n"), hundred);
+			check("a 100 KB body already sent in full still gets its 503 (no reset): " + sent.status, sent.code() == 503);
+
+			byte[] small = "{\"move\":\"D4\"}".repeat(140).getBytes(StandardCharsets.UTF_8);
+			Resp sm = send(post("/content", "application/json", small, "Connection: close\r\n"), small);
+			check("a 2 KB request still gets through (the small reserve): " + sm.status, sm.code() == 200);
+			check("GETs are not budgeted", exchange("GET /echo HTTP/1.1\r\nConnection: close\r\n\r\n").code() == 200);
+
+			try (Socket e = open()) {
+				e.getOutputStream().write("POST /content HTTP/1.1\r\nExpect: 100-continue\r\nContent-Length: 100000\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
+				e.getOutputStream().flush();
+				Resp er = readResponse(new BufferedInputStream(e.getInputStream()), false);
+				check("Expect: 100-continue while busy: a final 503, never 100 Continue: " + er.status, er.code() == 503);
+			}
+			String rep = b.report();
+			check("the minute report counts the refusals: " + rep, rep != null && rep.contains("busy (503): 4"));
+
+			// the holders: 408 once the grace is over (3 s, their first byte due then); they sent nothing, so it counts
+			int[] before = new int[4];
+			for (int i = 0; i < 4; i++) before[i] = pf.errorCount("198.51.100.2" + i);
+			int timedOut = 0;
+			long lastMs = 0;
+			for (Socket h : holders) {
+				h.setSoTimeout(8000);
+				Resp hr = readResponse(new BufferedInputStream(h.getInputStream()), false);
+				lastMs = (System.nanoTime() - tHold) / 1_000_000;
+				if (hr.code() == 408 && hr.text().contains("0 of 150000")) timedOut++;
+				h.close();
+			}
+			check("stalled bodies get 408 after the grace (" + timedOut + "/4, last after " + lastMs + " ms)", timedOut == 4 && lastMs >= 2900 && lastMs < 4500);
+			ServerEngine.BODY_GRACE_MS = 500;
+			boolean counted = true;
+			for (int i = 0; i < 4; i++) counted &= pf.errorCount("198.51.100.2" + i) == before[i] + 1;
+			check("a 408 for a body that never came is counted against the client", counted);
+			check("budget back to 0 after the 408s", budgetEmpty(b));
+			Resp retry = send(post("/content", "text/plain", hundred, "Connection: close\r\n"), hundred);
+			check("a retry now succeeds", retry.code() == 200 && retry.text().startsWith("len=100000 "));
+
+			// a trickle that would pass the old 30 s idle timeout: 1 byte every 300 ms, far under the 50 KB/s floor
+			int trickleBefore = pf.errorCount("198.51.100.35");
+			try (Socket tr = open()) {
+				OutputStream o = tr.getOutputStream();
+				o.write("POST /content HTTP/1.1\r\nX-Forwarded-For: 198.51.100.35\r\nContent-Length: 100000\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
+				o.write(new byte[2000]);   // 2 KB at once, then the trickle: a slow sender, not a stall
+				o.flush();
+				t0 = System.nanoTime();
+				tr.setSoTimeout(300);
+				InputStream in = new BufferedInputStream(tr.getInputStream());
+				Resp got = null;
+				for (int i = 0; i < 40 && got == null; i++) {
+					try { o.write('x'); o.flush(); } catch (IOException closed) { }
+					try { in.mark(1); if (in.read() != -1) { in.reset(); tr.setSoTimeout(2000); got = readResponse(in, false); } } catch (java.net.SocketTimeoutException wait) { }
+				}
+				long trMs = (System.nanoTime() - t0) / 1_000_000;
+				// cut when it falls behind the rate, soon after the 0.5 s grace (a deadline for the whole body would be 2.5 s)
+				check("a trickling body is cut once it falls behind (" + trMs + " ms): " + (got == null ? "no answer" : got.status),
+						got != null && got.code() == 408 && trMs >= 400 && trMs < 1500);
+			}
+			check("a 408 for a body that was arriving, only too slowly, is not counted", pf.errorCount("198.51.100.35") == trickleBefore);
+			check("budget back to 0 after the trickle", budgetEmpty(b));
+
+			// --- 405: a body to an address nobody reads is refused at once, unread
+			t0 = System.nanoTime();
+			byte[] kb = new byte[1024];
+			Resp nr = send("POST /a.txt HTTP/1.1\r\nX-Forwarded-For: 198.51.100.40\r\nContent-Length: 1000000\r\n\r\n", kb);
+			long nrMs = (System.nanoTime() - t0) / 1_000_000;
+			check("POST with a body to a static file: 405 at once (" + nrMs + " ms), Allow: " + nr.h("allow"),
+					nr.code() == 405 && nrMs < 1500 && "GET, HEAD".equals(nr.h("allow")) && nr.status.endsWith("Method Not Allowed"));
+			check("POST / with a body: 405", send("POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\n", "a=1".getBytes()).code() == 405);
+			check("POST to a static file without a body is served as before", exchange("POST /a.txt HTTP/1.1\r\nContent-Length: 0\r\n\r\n").code() == 200);
+			check("GET of the same file still works", exchange("GET /a.txt HTTP/1.1\r\n\r\n").code() == 200);
+			check("a mapped servlet takes a body", server.acceptsBody("/content") && !server.acceptsBody("/a.txt") && !server.acceptsBody("/jsp/x.jsp"));
+			File jsp = Files.createTempDirectory("ts-jsp").toFile();
+			JspCompiler.setDirectory(jsp.getPath());
+			check("with jsp_dir set, a JSP takes a body", server.acceptsBody("/jsp/x.jsp"));
+			JspCompiler.setDirectory(null);
+			jsp.delete();
+
+			// --- every way a request ends gives its reservation back
+			check("413 for a body over max_req_len, without waiting", exchange("POST /content HTTP/1.1\r\nContent-Length: 6000000\r\n\r\n").code() == 413);
+			check("  budget 0 after 413", budgetEmpty(b));
+			String bad = "--zz\r\nno headers end";
+			check("400 for a bad multipart body", send(post("/echo", "multipart/form-data; boundary=zz", bad.getBytes(), ""), bad.getBytes()).code() == 400);
+			check("  budget 0 after 400", budgetEmpty(b));
+			try (Socket eof = open()) {
+				eof.getOutputStream().write("POST /content HTTP/1.1\r\nContent-Length: 10000\r\n\r\nonly a little".getBytes(StandardCharsets.ISO_8859_1));
+				eof.shutdownOutput();
+				readResponse(new BufferedInputStream(eof.getInputStream()), false);
+			}
+			check("  budget 0 after the client closed mid-body", budgetEmpty(b));
+			check("500 when a servlet throws", send(post("/boom", "text/plain", hundred, ""), hundred).code() == 500);
+			check("  budget 0 after a servlet exception", budgetEmpty(b));
+			try (Socket er = open()) {
+				er.getOutputStream().write(post("/error", "text/plain", hundred, "").getBytes(StandardCharsets.ISO_8859_1));
+				er.getOutputStream().write(hundred);
+				er.getOutputStream().flush();
+				check("an Error in a servlet ends the connection", new BufferedInputStream(er.getInputStream()).read() == -1);
+			} catch (IOException reset) {
+				check("an Error in a servlet ends the connection (reset)", true);
+			}
+			check("  budget 0 after a servlet Error", budgetEmpty(b));
+			exchange("POST /.env HTTP/1.1\r\nX-Forwarded-For: 192.0.2.99\r\nContent-Length: 5\r\n\r\nhello");
+			check("  budget 0 after a probe path (closed, no answer)", budgetEmpty(b));
+			check("GET with a body is 400, nothing reserved", exchange("GET /echo HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello").code() == 400 && budgetEmpty(b));
+			check("HEAD reserves nothing", exchange("HEAD /a.txt HTTP/1.1\r\n\r\n").code() == 200 && budgetEmpty(b));
+			try (Socket k = open()) {
+				OutputStream o = k.getOutputStream();
+				InputStream in = new BufferedInputStream(k.getInputStream());
+				int ok = 0;
+				for (int i = 0; i < 50; i++) {
+					byte[] body = ("n=" + i + "&pad=" + "p".repeat(i * 2000)).getBytes(StandardCharsets.ISO_8859_1);
+					o.write(post("/echo", "application/x-www-form-urlencoded", body, "").getBytes(StandardCharsets.ISO_8859_1));
+					o.write(body);
+					o.flush();
+					Resp kr = readResponse(in, false);
+					if (kr.code() == 200 && kr.text().contains("n=" + i + "\n")) ok++;
+				}
+				check("50 POSTs (up to 100 KB) on one kept-alive socket: " + ok, ok == 50);
+			}
+			check("  budget 0 after keep-alive POSTs", budgetEmpty(b));
+
+			// --- the reservation ends when the servlet returns, not when a slow reader has taken the response
+			try (Socket slow = new Socket()) {
+				slow.setReceiveBufferSize(1024);
+				slow.connect(new java.net.InetSocketAddress("127.0.0.1", port));
+				slow.getOutputStream().write(post("/big", "text/plain", hundred, "").getBytes(StandardCharsets.ISO_8859_1));
+				slow.getOutputStream().write(hundred);
+				slow.getOutputStream().flush();
+				Thread.sleep(500);   // the servlet has returned; its 4 MB response is stuck in the socket buffers
+				check("a client that does not read its response holds no budget (" + b.used() + ")", budgetEmpty(b));
+				slow.setSoTimeout(10000);
+				InputStream in = new BufferedInputStream(slow.getInputStream());
+				Resp big = readResponse(in, false);
+				boolean same = big.body.length == 4 << 20;
+				for (int i = 0; same && i < big.body.length; i++) same = big.body[i] == (byte) (i * 7);
+				check("the 4 MB response, written from its buffer without a copy, arrives intact", big.code() == 200 && same);
+			}
+			byte[] cjkForm = ("a=" + "%E4%B8%AD".repeat(20_000)).getBytes(StandardCharsets.ISO_8859_1);
+			Resp cjk = send(post("/echo", "application/x-www-form-urlencoded", cjkForm, "Connection: close\r\n"), cjkForm);
+			check("a 180 KB urlencoded form (11 x = 2 MB, within the large pool) is parsed", cjk.code() == 200 && cjk.text().contains("params=1"));
+			check("  budget 0 after the form", budgetEmpty(b));
+
+			// --- many at once: each answered 200 or 503, never more than the budget, all given back
+			List<Thread> ts = new ArrayList<>();
+			java.util.concurrent.ConcurrentLinkedQueue<Integer> codes = new java.util.concurrent.ConcurrentLinkedQueue<>();
+			java.util.concurrent.atomic.AtomicLong maxUsed = new java.util.concurrent.atomic.AtomicLong(), maxLarge = new java.util.concurrent.atomic.AtomicLong();
+			java.util.concurrent.atomic.AtomicBoolean sampling = new java.util.concurrent.atomic.AtomicBoolean(true);
+			Thread sampler = Thread.ofVirtual().start(() -> {
+				while (sampling.get()) {
+					maxUsed.accumulateAndGet(b.used(), Math::max);
+					maxLarge.accumulateAndGet(b.usedLarge(), Math::max);
+					try { Thread.sleep(1); } catch (InterruptedException e) { return; }   // parks: a spin would hold a lone carrier
+				}
+			});
+			for (int i = 0; i < 40; i++) {
+				ts.add(Thread.ofVirtual().start(() -> {
+					try { codes.add(send(post("/content?ms=50", "text/plain", hundred, "Connection: close\r\n"), hundred).code()); }
+					catch (IOException e) { codes.add(-1); }
+				}));
+			}
+			for (Thread th : ts) th.join();
+			sampling.set(false);
+			sampler.join();
+			long ok200 = codes.stream().filter(c -> c == 200).count(), busy503 = codes.stream().filter(c -> c == 503).count();
+			check("40 concurrent 100 KB posts: " + ok200 + " x 200, " + busy503 + " x 503", ok200 + busy503 == 40 && ok200 >= 6);
+			check("never more than the budget held (" + maxUsed + " bytes, large " + maxLarge + ")",
+					maxUsed.get() > 0 && maxUsed.get() <= b.total() && maxLarge.get() <= b.largeCap());
+			check("  budget 0 at the end", budgetEmpty(b));
+
+			// the startup line describes the budget
+			String log = "";
+			for (File f : dir.listFiles((d, n) -> n.endsWith(".log"))) log += Files.readString(f.toPath());
+			check("startup log line: body budget", log.contains("Body budget: 3.8 MB (bodies over 64 KB: at most 2.9 MB together)"));
+		} finally {
+			ServerEngine.BODY_WAIT_MS = waitMs;
+			ServerEngine.BODY_GRACE_MS = graceMs;
+		}
 	}
 
 	/** n keys from the "Aa"/"BB" family, which all share one String.hashCode */
