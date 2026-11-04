@@ -1,5 +1,7 @@
 package com.tinyserver;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
@@ -15,7 +17,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * rest is always there for small requests (moves, chat, JSON) even while big uploads fill their share. A request that
  * does not fit waits; every release wakes all waiters and each checks again, so a big body waiting never holds up a
  * small one behind it. A lock and condition rather than synchronized, so a waiting virtual thread does not pin its
- * carrier.
+ * carrier. One client (an IPv4 address or IPv6 /64) may hold at most half of the large share, so it takes at least two
+ * addresses to keep big uploads out by announcing bodies and sending them slowly.
  *
  * <p>Not counted: what a servlet allocates while it works (a decoded image, a JSON tree), responses, and the buffers
  * of each connection. Those share the other 3/4 of the heap.
@@ -35,6 +38,8 @@ final class BodyBudget {
 	private final Condition released = lock.newCondition();
 	private long used, usedLarge, peak, busy, slow;
 	private int waiting;
+	/** large charges held per client key; an entry goes when its client holds none */
+	private final Map<String, Long> largeByClient = new HashMap<>();
 
 	/** a budget of {@code total} bytes; at least 4 KiB */
 	BodyBudget(long total) {
@@ -72,21 +77,35 @@ final class BodyBudget {
 	 * {@link #release}.
 	 */
 	boolean acquire(long charge, boolean large, long waitMs) throws InterruptedException {
+		return acquire(charge, large, waitMs, null);
+	}
+
+	/**
+	 * As above, for a large body of {@code client} (a key from ProbeFilter.clientKey, or null for no per-client
+	 * limit): refused at once if that client already holds a large reservation and this one would take it past half
+	 * of the large share. A single body is always allowed, so the biggest one can still run.
+	 */
+	boolean acquire(long charge, boolean large, long waitMs, String client) throws InterruptedException {
 		long nanos = TimeUnit.MILLISECONDS.toNanos(waitMs);
+		String key = large ? client : null;
 		lock.lock();
 		try {
-			if (!fits(charge, large) && waiting >= MAX_WAITERS) {
+			if (overClientCap(charge, key) || (!fits(charge, large) && waiting >= MAX_WAITERS)) {
 				busy++;
 				return false;
 			}
 			waiting++;
 			try {
 				while (!fits(charge, large)) {
-					if (nanos <= 0) {
+					if (nanos <= 0 || overClientCap(charge, key)) {
 						busy++;
 						return false;
 					}
 					nanos = released.awaitNanos(nanos);
+				}
+				if (overClientCap(charge, key)) {   // the client got another reservation while this one waited
+					busy++;
+					return false;
 				}
 			} finally {
 				waiting--;
@@ -95,11 +114,22 @@ final class BodyBudget {
 			if (large) {
 				usedLarge += charge;
 			}
+			if (key != null) {
+				largeByClient.merge(key, charge, Long::sum);
+			}
 			peak = Math.max(peak, used);
 			return true;
 		} finally {
 			lock.unlock();
 		}
+	}
+
+	private boolean overClientCap(long charge, String key) {
+		if (key == null) {
+			return false;
+		}
+		long held = largeByClient.getOrDefault(key, 0L);
+		return held > 0 && held + charge > largeCap / 2;
 	}
 
 	private boolean fits(long charge, boolean large) {
@@ -108,11 +138,19 @@ final class BodyBudget {
 
 	/** gives back what one granted {@link #acquire} reserved; exactly once per grant */
 	void release(long charge, boolean large) {
+		release(charge, large, null);
+	}
+
+	/** as above, for a reservation acquired with a {@code client} key */
+	void release(long charge, boolean large, String client) {
 		lock.lock();
 		try {
 			used -= charge;
 			if (large) {
 				usedLarge -= charge;
+				if (client != null) {
+					largeByClient.computeIfPresent(client, (k, v) -> v - charge <= 0 ? null : v - charge);
+				}
 			}
 			released.signalAll();
 		} finally {
@@ -142,6 +180,16 @@ final class BodyBudget {
 		lock.lock();
 		try {
 			return used;
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	/** large charges held by {@code client}, for tests */
+	long heldBy(String client) {
+		lock.lock();
+		try {
+			return largeByClient.getOrDefault(client, 0L);
 		} finally {
 			lock.unlock();
 		}
@@ -186,6 +234,9 @@ final class BodyBudget {
 		if (biggest * COPIES > pool) {
 			s += ". WARNING: a body near max_req_len needs " + mb(biggest * COPIES) + " and runs only alone;"
 					+ " raise -Xmx or body_budget, or lower max_req_len";
+		} else if (isLarge(biggest) && c > largeCap / 2) {
+			s += ". WARNING: one body near max_req_len takes over half the share for big bodies, so one client can"
+					+ " keep other big uploads out; raise -Xmx or body_budget, or lower max_req_len";
 		}
 		return s;
 	}

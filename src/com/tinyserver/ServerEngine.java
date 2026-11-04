@@ -100,18 +100,20 @@ public abstract class ServerEngine implements Runnable {
 		final BodyBudget budget;
 		final long charge;
 		final boolean large;
+		final String client;
 		boolean released;
 
-		Reservation(BodyBudget budget, long charge, boolean large) {
+		Reservation(BodyBudget budget, long charge, boolean large, String client) {
 			this.budget = budget;
 			this.charge = charge;
 			this.large = large;
+			this.client = client;
 		}
 
 		void release() {
 			if (!released) {
 				released = true;
-				budget.release(charge, large);
+				budget.release(charge, large, client);
 			}
 		}
 	}
@@ -655,11 +657,12 @@ public abstract class ServerEngine implements Runnable {
 		String type = request.headers.get(CONTENT_TYPE);
 		boolean form = type != null && type.trim().startsWith(CONTENT_TYPE_FORM_URLENCODED);
 		long charge = bodyLength > 0 ? bodyBudget.chargeFor(bodyLength, form) : 0;
+		String client = large ? ProbeFilter.clientKey(effectiveIp) : null;   // one client: at most half the large share
 		Reservation held = null;
 		if (charge > 0) {
 			boolean granted;
 			try {
-				granted = bodyBudget.acquire(charge, large, BODY_WAIT_MS);
+				granted = bodyBudget.acquire(charge, large, BODY_WAIT_MS, client);
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 				granted = false;
@@ -667,7 +670,7 @@ public abstract class ServerEngine implements Runnable {
 			if (!granted) {
 				throw new BodyNotReadException(503, "Server busy, try again shortly.", "Retry-After: 2\r\n", bodyLength);
 			}
-			held = new Reservation(bodyBudget, charge, large);
+			held = new Reservation(bodyBudget, charge, large, client);
 		}
 		reservation.set(held);
 		try {

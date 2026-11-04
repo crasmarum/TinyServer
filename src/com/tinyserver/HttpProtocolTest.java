@@ -507,6 +507,26 @@ public class HttpProtocolTest {
 			check("a 408 for a body that was arriving, only too slowly, is not counted", pf.errorCount("198.51.100.35") == trickleBefore);
 			check("budget back to 0 after the trickle", budgetEmpty(b));
 
+			// --- one client cannot hold more than half the large share: the reviewers' attack was a couple of connections
+			// announcing big bodies and sending a little during the grace, again and again
+			List<Socket> sameClient = new ArrayList<>();
+			for (int i = 0; i < 2; i++) {
+				Socket h = open();
+				h.getOutputStream().write("POST /content HTTP/1.1\r\nX-Forwarded-For: 198.51.100.50\r\nContent-Length: 150000\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
+				h.getOutputStream().flush();
+				sameClient.add(h);
+			}
+			for (int i = 0; i < 100 && b.heldBy("198.51.100.50") < 1_500_000; i++) Thread.sleep(10);
+			check("one client holds two 150 KB bodies (1.5 MB, half the large share): " + b.heldBy("198.51.100.50"), b.heldBy("198.51.100.50") == 1_500_000);
+			t0 = System.nanoTime();
+			Resp third = exchange("POST /content HTTP/1.1\r\nX-Forwarded-For: 198.51.100.50\r\nContent-Length: 150000\r\n\r\n");
+			long thirdMs = (System.nanoTime() - t0) / 1_000_000;
+			check("its third gets 503 at once (" + thirdMs + " ms), though the pool has room", third.code() == 503 && thirdMs < 250);
+			Resp other = send(post("/content", "text/plain", hundred, "X-Forwarded-For: 198.51.100.51\r\nConnection: close\r\n"), hundred);
+			check("another client's upload goes through meanwhile", other.code() == 200);
+			for (Socket h : sameClient) h.close();
+			check("  budget 0 after the per-client test", budgetEmpty(b) && b.heldBy("198.51.100.50") == 0);
+
 			// --- 405: a body to an address nobody reads is refused at once, unread
 			t0 = System.nanoTime();
 			byte[] kb = new byte[1024];
@@ -613,8 +633,9 @@ public class HttpProtocolTest {
 				}
 			});
 			for (int i = 0; i < 40; i++) {
-				ts.add(Thread.ofVirtual().start(() -> {
-					try { codes.add(send(post("/content?ms=50", "text/plain", hundred, "Connection: close\r\n"), hundred).code()); }
+				final int k = i;
+				ts.add(Thread.ofVirtual().start(() -> {   // 40 clients (the per-client cap would otherwise allow 3 at a time)
+					try { codes.add(send(post("/content?ms=50", "text/plain", hundred, "Connection: close\r\nX-Forwarded-For: 203.0.113." + (100 + k) + "\r\n"), hundred).code()); }
 					catch (IOException e) { codes.add(-1); }
 				}));
 			}

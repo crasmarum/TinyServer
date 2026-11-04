@@ -133,6 +133,23 @@ public class BodyBudgetTest {
 		check("budget empty after the queue test", b.used() == 0);
 		b.report();
 
+		// one client holds at most half of the large share (1.5 MB of 3 MB); a single body is always allowed
+		check("client a: a first 1 MB large body", b.acquire(1_000_000, true, 0, "a"));
+		t0 = System.nanoTime();
+		check("client a: a second one (2 MB > 1.5 MB) is refused at once, though the pool has room", !b.acquire(1_000_000, true, 1000, "a") && ms(t0) < 50);
+		check("client b is not affected", b.acquire(1_000_000, true, 0, "b"));
+		check("small bodies are not counted per client", b.acquire(10_000, false, 0, "a"));
+		check("held by a: " + b.heldBy("a"), b.heldBy("a") == 1_000_000);
+		b.release(10_000, false, null);
+		b.release(1_000_000, true, "a");
+		b.release(1_000_000, true, "b");
+		check("given back: nothing held per client", b.heldBy("a") == 0 && b.heldBy("b") == 0 && b.used() == 0);
+		check("a single body over half the share (clamped to all of it) is allowed for a client holding nothing",
+				b.acquire(b.chargeFor(5_999_999), true, 0, "c"));
+		check("but nothing more for that client", !b.acquire(b.chargeFor(70_000), true, 0, "c"));
+		b.release(b.chargeFor(5_999_999), true, "c");
+		b.report();
+
 		// a tiny budget still serves a small body (clamped to the whole budget)
 		BodyBudget tiny = new BodyBudget(1);
 		check("budget at least 4 KiB: " + tiny.total(), tiny.total() == 4096);
@@ -182,6 +199,8 @@ public class BodyBudgetTest {
 		check("6 MB uploads, 100 MB budget: " + uploads, uploads.contains("so 2 at once") && !uploads.contains("WARNING"));
 		String chat = new BodyBudget(64L << 20).describe(15_000_000);
 		check("15 MB messages on a 256 MB heap warn: " + chat, chat.contains("WARNING") && chat.contains("so 1 at once"));
+		String half = new BodyBudget(48L << 20).describe(6_000_000);
+		check("6 MB uploads on a 48 MB budget: one body over half the large share is warned about: " + half, half.contains("over half"));
 		String quiet = new BodyBudget(100L << 20).report();
 		check("an idle budget reports nothing", quiet == null);
 	}

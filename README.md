@@ -118,7 +118,8 @@ Built in, no configuration:
   until then); 5 copies of a body are alive at once while it is read and handled (bytes, decoded text, `content`, the
   servlet's `getContent()`). After the servlet returns, the request's body, parameters and uploads are cleared; a
   servlet that waits after reading its request (a long poll) can give them back earlier with `request.releaseBody()`.
-  Bodies over 64 KB may together use at most 3/4 of the budget, so small requests (forms, JSON) always have room.
+  Bodies over 64 KB may together use at most 3/4 of the budget, so small requests (forms, JSON) always have room,
+  and one client (an IPv4 address or IPv6 /64, behind a proxy the last `X-Forwarded-For` entry) at most half of that.
   A body that does not fit within 2 s gets 503 with `Retry-After: 2`, unread; one bigger than the large share is
   clamped to it and runs alone. The startup log says how many `max_req_len` bodies fit at once, with a warning when
   only one does. A POST with a body to a path no servlet or JSP takes gets 405, unread. A body that falls behind
